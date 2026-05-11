@@ -1,0 +1,64 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// 中文拼写词汇表
+model ChineseSpellingItem {
+  id          String   @id @default(uuid())
+  english     String
+  chinese     String
+  category    String?
+  tags        String?  // JSON string array
+  difficulty  String?  // 'easy' | 'medium' | 'hard'
+  sequence    Int      @default(0)  // 导入顺序
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  favorites   ChineseSpellingFavorite[]
+}
+
+// 中文拼写收藏表
+model ChineseSpellingFavorite {
+  id             String   @id @default(uuid())
+  itemId         String
+  favoriteDate   String   // YYYY-MM-DD format
+  createdAt      DateTime @default(now())
+  item           ChineseSpellingItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, favoriteDate])
+}
+
+// 中文拼写练习进度表
+model ChineseSpellingProgress {
+  id               String   @id @default(uuid())
+  mode             String   // 'practice' | 'challenge'
+  currentIndex     Int      // 当前练习到的索引
+  totalItems       Int      // 总词汇数
+  completedCount   Int      // 已完成数量
+  lastPracticedAt  DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([mode])
+}
+
+// SynoMaster练习进度表
+model SynomasterProgress {
+  id               String   @id @default(uuid())
+  mode             String   // 'practice' | 'challenge'
+  currentIndex     Int      // 当前练习到的索引
+  totalItems       Int      // 总词组数
+  completedCount   Int      // 已完成数量
+  lastPracticedAt  DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([mode])
+}

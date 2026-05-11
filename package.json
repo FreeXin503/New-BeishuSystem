@@ -1,0 +1,44 @@
+{
+  "name": "synomaster-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview",
+    "save": "git add . && git commit -m \"Auto-save: $(Get-Date -Format yyyy-MM-dd-HH-mm-ss)\" && git push origin main",
+    "quick-save": "git add . && git commit -m \"Quick save\" && git push origin main",
+    "save-no-push": "git add . && git commit -m \"Local save: $(Get-Date -Format yyyy-MM-dd-HH-mm-ss)\"",
+    "push": "git push origin main"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1",
+    "mysql2": "^3.20.0",
+    "prisma": "^5.20.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.8.1",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "@typescript-eslint/eslint-plugin": "^7.2.0",
+    "@typescript-eslint/parser": "^7.2.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.27",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.6",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.2.2",
+    "vite": "^5.2.0"
+  }
+}

@@ -1,0 +1,93 @@
+[
+  {
+    "id": "syn_001",
+    "group": ["profit", "margin", "gain", "return", "yield"],
+    "meaning": "n.利润，收益",
+    "category": "Business - Finance",
+    "type": "synonym"
+  },
+  {
+    "id": "syn_002", 
+    "group": ["change", "shift", "modify", "alter", "transform", "adjust", "adapt"],
+    "meaning": "v.改变，变化",
+    "category": "General - Action",
+    "type": "synonym"
+  },
+  {
+    "id": "syn_003",
+    "group": ["adequate", "sufficient", "enough", "ample", "plentiful"],
+    "meaning": "adj.充足的，足够的",
+    "category": "General - Quantity",
+    "type": "synonym"
+  },
+  {
+    "id": "logic_001",
+    "group": ["due to", "owing to", "thanks to", "because of", "on account of"],
+    "meaning": "由于，因为",
+    "category": "Logic - Cause",
+    "type": "logic_cause"
+  },
+  {
+    "id": "logic_002",
+    "group": ["thus", "therefore", "hence", "consequently", "as a result", "accordingly"],
+    "meaning": "因此，所以",
+    "category": "Logic - Effect", 
+    "type": "logic_effect"
+  },
+  {
+    "id": "logic_003",
+    "group": ["because", "since", "as", "for", "given that"],
+    "meaning": "因为，既然",
+    "category": "Logic - Cause",
+    "type": "logic_cause"
+  },
+  {
+    "id": "att_001",
+    "group": ["optimistic", "hopeful", "positive", "cheerful", "enthusiastic"],
+    "meaning": "adj.乐观的，积极的",
+    "category": "Attitude - Positive",
+    "type": "attitude_positive"
+  },
+  {
+    "id": "att_002",
+    "group": ["indifferent", "carefree", "detached", "unconcerned", "apathetic"],
+    "meaning": "adj.冷漠的，漠不关心的",
+    "category": "Attitude - Negative",
+    "type": "attitude_negative"
+  },
+  {
+    "id": "att_003",
+    "group": ["neutral", "impartial", "objective", "unbiased", "balanced"],
+    "meaning": "adj.中立的，客观的",
+    "category": "Attitude - Neutral",
+    "type": "attitude_neutral"
+  },
+  {
+    "id": "att_004",
+    "group": ["support", "advocate", "endorse", "back", "champion"],
+    "meaning": "v.支持，拥护",
+    "category": "Attitude - Positive",
+    "type": "attitude_positive"
+  },
+  {
+    "id": "att_005",
+    "group": ["confused", "puzzled", "bewildered", "perplexed", "baffled"],
+    "meaning": "adj.困惑的，迷茫的",
+    "category": "Attitude - Negative",
+    "type": "attitude_negative"
+  },
+  {
+    "id": "syn_004",
+    "group": ["important", "significant", "crucial", "vital", "essential", "critical"],
+    "meaning": "adj.重要的，关键的",
+    "category": "General - Quality",
+    "type": "synonym"
+  },
+  {
+    "id": "syn_005",
+    "group": ["increase", "rise", "grow", "boost", "enhance", "elevate"],
+    "meaning": "v.增加，提升",
+    "category": "General - Change",
+    "type": "synonym"
+  }
+]
