@@ -65,6 +65,19 @@ export default function QuizPracticePage() {
 
   const currentQuestion = questions[currentIndex];
 
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (e.ctrlKey && !e.repeat && currentQuestion) {
+        e.preventDefault();
+        const newStatus = await toggleFavorite(currentQuestion, category, 'quiz', archiveId || undefined);
+        setFavoriteMap(prev => new Map(prev).set(currentQuestion.id, newStatus));
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentQuestion, category, archiveId]);
+
   const handleSelectAnswer = (answer: string) => {
     if (showResult) return;
     setSelectedAnswer(answer);
@@ -375,7 +388,7 @@ export default function QuizPracticePage() {
                 } else if (isSelected) { borderColor = 'var(--color-primary)'; bgColor = 'rgba(59, 130, 246, 0.1)'; }
                 return (
                   <button key={option} onClick={() => handleSelectAnswer(option)} disabled={showResult} className="w-full text-left p-4 rounded-lg transition-all flex items-center gap-3" style={{ backgroundColor: bgColor, border: `2px solid ${borderColor}`, color: textColor }}>
-                    <span className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-xl" style={{ backgroundColor: isSelected || (showResult && isCorrectOption) ? borderColor : 'var(--color-bg)', color: isSelected || (showResult && isCorrectOption) ? 'white' : 'var(--color-text)' }}>
+                    <span className="w-14 h-14 rounded-full flex items-center justify-center flex-shrink-0 text-2xl" style={{ backgroundColor: isSelected || (showResult && isCorrectOption) ? borderColor : 'var(--color-bg)', color: isSelected || (showResult && isCorrectOption) ? 'white' : 'var(--color-text)' }}>
                       {option === '对' ? '✓' : '✗'}
                     </span>
                     <span className="text-lg font-medium">{option}</span>
@@ -397,7 +410,7 @@ export default function QuizPracticePage() {
               } else if (isSelected) { borderColor = 'var(--color-primary)'; bgColor = 'rgba(59, 130, 246, 0.1)'; }
               return (
                 <button key={index} onClick={() => handleSelectAnswer(option)} disabled={showResult} className="w-full text-left p-4 rounded-lg transition-all flex items-start gap-3" style={{ backgroundColor: bgColor, border: `2px solid ${borderColor}`, color: textColor }}>
-                  <span className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 font-medium" style={{ backgroundColor: isSelected || (showResult && isCorrectOption) ? borderColor : 'var(--color-bg)', color: isSelected || (showResult && isCorrectOption) ? 'white' : 'var(--color-text)' }}>
+                  <span className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 text-lg font-medium" style={{ backgroundColor: isSelected || (showResult && isCorrectOption) ? borderColor : 'var(--color-bg)', color: isSelected || (showResult && isCorrectOption) ? 'white' : 'var(--color-text)' }}>
                     {getOptionLabel(index)}
                   </span>
                   <span className="pt-1">{option}</span>

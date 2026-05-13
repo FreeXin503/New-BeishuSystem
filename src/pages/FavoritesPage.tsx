@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { FavoriteCategory, FavoriteQuestion, FavoriteStats } from '../types';
 import {
@@ -389,6 +389,22 @@ export default function FavoritesPage() {
             <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>分类数</p>
           </div>
         </div>
+
+        {favorites.length > 0 && viewMode === 'list' && (
+          <button
+            onClick={() => {
+              const quizQuestions = favorites.map((item) => item.question);
+              sessionStorage.setItem('importedQuiz', JSON.stringify(quizQuestions));
+              sessionStorage.setItem('currentArchiveId', 'favorites');
+              sessionStorage.setItem('currentCategory', selectedCategory || 'default');
+              navigate('/quiz-practice');
+            }}
+            className="w-full py-3 rounded-lg text-white font-medium mb-6"
+            style={{ backgroundColor: 'var(--color-primary)' }}
+          >
+            开始练习 ({favorites.length} 题)
+          </button>
+        )}
 
         {viewMode === 'stats' && (
           <div className="mb-6">
