@@ -514,8 +514,8 @@ export default function FillBlankImportPage() {
                   onChange={e => setBatchText(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg font-mono text-sm"
                   style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                  placeholder="每行一道题，支持以下格式：&#10;1. 问题___答案&#10;2. 问题|答案&#10;3. 问题\t答案&#10;4. 编号. 问题答案（支持中文冒号和英文冒号）&#10;&#10;示例：&#10;1. 马克思主义的基本原理是___|辩证唯物主义&#10;2. ___是马克思主义的核心|实践&#10;3. 42. 该条数据库语句  SELECT * FROM students WHERE age BETWEEN 15 AND 20; 的作用是（查找学生集合中年龄在15~20之间的人）答案：查找学生集合中年龄在15~20之间的人&#10;4. 在 Express 中使用（ app.use）方法可将路由处理程序挂载到特定的路径前缀上。答案：app.use"
-                  rows={10}
+                  placeholder={`支持的导入格式：\n\n【格式1】问题___答案\n示例：马克思主义的基本原理是___|辩证唯物主义\n\n【格式2】问题|答案\n示例：___是马克思主义的核心|实践\n\n【格式3】编号. 问题答案：答案\n示例：42. 该条数据库语句的作用是（查找学生集合中年龄在15~20之间的人）答案：查找学生集合中年龄在15~20之间的人\n\n【格式4】编号. 问题（答案）剩余内容\n示例：在 Express 中使用（app.use）方法可将路由处理程序挂载到特定的路径前缀上。\n\n【格式5】问题\n答案：答案\n示例：在 RESTful API 中，POST 请求通常用于（创建）数据。\n答案：创建\n\n每行一道题，请选择以上任一格式输入`}
+                  rows={12}
                 />
               </div>
 
