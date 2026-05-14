@@ -42,7 +42,6 @@ export default function ChineseSpellingPage() {
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [showReviewMode, setShowReviewMode] = useState(false);
   const [savedProgress, setSavedProgress] = useState<any>(null);
-  const [showContinueDialog, setShowContinueDialog] = useState(false);
   const [showStartOptionsDialog, setShowStartOptionsDialog] = useState(false);
   const [showSelectWordDialog, setShowSelectWordDialog] = useState(false);
   const [reviewDate, setReviewDate] = useState<string>('');
@@ -178,7 +177,6 @@ export default function ChineseSpellingPage() {
     setHintLevel(0);
     setShowResult(false);
     setSessionResult(null);
-    setShowContinueDialog(false);
     setShowStartOptionsDialog(false);
     setSavedProgress(null);
     setPendingMode(null);
@@ -235,7 +233,6 @@ export default function ChineseSpellingPage() {
     setHintLevel(0);
     setShowResult(false);
     setSessionResult(null);
-    setShowContinueDialog(false);
     setShowStartOptionsDialog(false);
     setSavedProgress(null);
     setPendingMode(null);
@@ -707,7 +704,7 @@ export default function ChineseSpellingPage() {
           <div className="bg-white/90 backdrop-blur rounded-3xl p-14 shadow-2xl border border-emerald-100 relative">
             {/* 收藏状态指示器 - 右上角 */}
             <div className="absolute top-4 right-4 z-10">
-              {gameState.currentItem && favorites.some(fav => fav.id === gameState.currentItem.id) ? (
+              {gameState.currentItem && favorites.some(fav => fav.id === gameState.currentItem!.id) ? (
                 <svg className="w-10 h-10 text-yellow-400" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
                 </svg>

@@ -7,7 +7,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { validateParsedQuestions, autoParseQuestions, validateParsedJudgments } from '../services/learning/quiz';
 import { createQuizArchive, getArchives, updateArchive, removeArchive } from '../services/learning/quizArchive';
 import { DEFAULT_QUIZ_CATEGORIES, getCategoryLabel } from '../services/learning/wrongAnswer';
-import { getAllCustomCategories, saveCustomCategory, deleteCustomCategory } from '../services/storage/indexedDB';
+import { getAllCustomCategories, saveCustomCategory, deleteCustomCategory, getAllFavorites, getFavoritesByCategory } from '../services/storage/indexedDB';
+import { getFavoriteStats } from '../services/learning/favorite';
 import type { Question, QuizArchive } from '../types';
 
 interface CategoryOption {
@@ -46,15 +47,61 @@ export default function QuizImportPage() {
   const [editCategory, setEditCategory] = useState('');
   const [editDescription, setEditDescription] = useState('');
 
+  // 收藏相关
+  const [showFavorites, setShowFavorites] = useState(false);
+  const [favStats, setFavStats] = useState<any[]>([]);
+
   useEffect(() => {
     loadArchives();
     loadCategories();
+    loadFavoriteStats();
   }, []);
 
   async function loadArchives() {
     const list = await getArchives();
     setArchives(list);
   }
+
+  async function loadFavoriteStats() {
+    try {
+      const stats = await getFavoriteStats();
+      setFavStats(stats);
+    } catch (err) {
+      console.error('加载收藏统计失败:', err);
+    }
+  }
+
+  const handlePracticeAllFavorites = async () => {
+    try {
+      const all = await getAllFavorites();
+      if (all.length === 0) {
+        alert('暂无收藏题目！');
+        return;
+      }
+      sessionStorage.setItem('importedQuiz', JSON.stringify(all.map(item => item.question)));
+      sessionStorage.setItem('currentArchiveId', 'favorites');
+      sessionStorage.setItem('currentCategory', 'all');
+      navigate('/quiz-practice');
+    } catch (err) {
+      console.error('练习收藏失败:', err);
+    }
+  };
+
+  const handlePracticeFavoriteCategory = async (categoryId: string) => {
+    try {
+      const filtered = await getFavoritesByCategory(categoryId);
+      if (filtered.length === 0) {
+        alert('该分类下暂无收藏题目！');
+        return;
+      }
+      sessionStorage.setItem('importedQuiz', JSON.stringify(filtered.map(item => item.question)));
+      sessionStorage.setItem('currentArchiveId', 'favorites');
+      sessionStorage.setItem('currentCategory', categoryId);
+      navigate('/quiz-practice');
+    } catch (err) {
+      console.error('练习收藏分类失败:', err);
+    }
+  };
 
   async function loadCategories() {
     const customCats = await getAllCustomCategories();
@@ -287,9 +334,11 @@ D. 全面建设小康社会
               <h1 className="text-2xl font-bold" style={{ color: 'var(--color-text)' }}>导入选择题</h1>
             </div>
             <div className="flex gap-2">
-              <Link to="/favorites" className="px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-warning)' }}>⭐ 收藏夹</Link>
+              <button onClick={() => { setShowFavorites(!showFavorites); setShowArchives(false); }} className="px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors hover:opacity-85" style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-warning)' }}>
+                ⭐ 收藏练习 ({favStats.reduce((acc, curr) => acc + curr.count, 0)})
+              </button>
               <Link to="/wrong-answers" className="px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-error)' }}>📕 错题本</Link>
-              <button onClick={() => setShowArchives(!showArchives)} className="px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-text)' }}>
+              <button onClick={() => { setShowArchives(!showArchives); setShowFavorites(false); }} className="px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors hover:opacity-85" style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-text)' }}>
                 📚 题库 ({archives.length})
               </button>
             </div>
@@ -326,6 +375,58 @@ D. 全面建设小康社会
                 <button onClick={handleSaveEdit} disabled={!editTitle.trim()} className="flex-1 py-2 rounded-lg text-white disabled:opacity-50" style={{ backgroundColor: 'var(--color-primary)' }}>保存</button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* 收藏练习 */}
+        {showFavorites && (
+          <div className="mb-6 animate-fade-in">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="text-lg font-medium flex items-center gap-2" style={{ color: 'var(--color-text)' }}>⭐ 收藏的练习入口</h2>
+              <Link to="/favorites" className="text-sm hover:underline" style={{ color: 'var(--color-primary)' }}>管理收藏夹 &gt;</Link>
+            </div>
+            {favStats.length === 0 ? (
+              <div className="text-center py-8 rounded-lg" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)', color: 'var(--color-secondary)' }}>
+                暂无收藏题目，做题时点击右上角星星即可自动分流收藏到对应的练习题组中
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {/* 练习全部收藏 */}
+                <div className="p-4 rounded-lg flex justify-between items-center transition-all duration-300 hover:shadow-md" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}>
+                  <div>
+                    <h3 className="font-bold flex items-center gap-2" style={{ color: 'var(--color-text)' }}>
+                      <span className="text-lg">🔥</span> 全部已收藏题目
+                    </h3>
+                    <p className="text-sm mt-1" style={{ color: 'var(--color-secondary)' }}>
+                      共 {favStats.reduce((acc, curr) => acc + curr.count, 0)} 道题
+                    </p>
+                  </div>
+                  <button onClick={handlePracticeAllFavorites} className="px-4 py-2 rounded-lg text-sm text-white font-medium hover:opacity-90 transition-all" style={{ backgroundColor: 'var(--color-primary)' }}>
+                    开始练习全部
+                  </button>
+                </div>
+
+                {/* 各个练习题组文件夹 */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {favStats.map(stat => (
+                    <div key={stat.category} className="p-4 rounded-lg flex justify-between items-center transition-all duration-300 hover:shadow-md" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}>
+                      <div className="min-w-0 pr-3">
+                        <h3 className="font-medium flex items-center gap-2 truncate" style={{ color: 'var(--color-text)' }}>
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: 'var(--color-warning)' }} />
+                          <span className="truncate">{stat.categoryName}</span>
+                        </h3>
+                        <p className="text-xs mt-1" style={{ color: 'var(--color-secondary)' }}>
+                          已收藏 {stat.count} 道题目
+                        </p>
+                      </div>
+                      <button onClick={() => handlePracticeFavoriteCategory(stat.category)} className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs text-white font-medium hover:opacity-90 transition-all" style={{ backgroundColor: 'var(--color-warning)' }}>
+                        练习该组
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -177,7 +177,7 @@ describe('getDueCards', () => {
             contentId: fc.uuid(),
             userId: fc.uuid(),
             cardType: fc.constantFrom('fill-blank', 'quiz', 'matching') as fc.Arbitrary<'fill-blank' | 'quiz' | 'matching'>,
-            cardData: fc.constant({ type: 'fill-blank', text: '', blanks: [] }),
+            cardData: fc.constant({ type: 'fill-blank', text: '', blanks: [] as any }),
             easeFactor: fc.float({ min: Math.fround(1.3), max: Math.fround(5.0), noNaN: true }),
             interval: fc.integer({ min: 0, max: 365 }),
             repetitions: fc.integer({ min: 0, max: 100 }),

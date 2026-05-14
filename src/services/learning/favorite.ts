@@ -12,6 +12,8 @@ import {
   getAllFavoriteCategories,
   saveFavoriteCategory,
   deleteFavoriteCategory,
+  getQuizArchiveById,
+  getFavoriteCategoryById,
 } from '../storage/indexedDB';
 
 /**
@@ -24,6 +26,32 @@ export async function addFavorite(
   sourceId?: string,
   notes?: string
 ): Promise<FavoriteQuestion> {
+  let finalCategory = category;
+
+  // 如果来自特定的练习题组，为其自动建立对应的收藏夹
+  if (sourceType === 'quiz' && sourceId) {
+    try {
+      const catExists = await getFavoriteCategoryById(sourceId);
+      if (!catExists) {
+        const archive = await getQuizArchiveById(sourceId);
+        if (archive) {
+          await saveFavoriteCategory({
+            id: sourceId,
+            name: archive.title,
+            description: `来自练习题组: ${archive.title}`,
+            color: '#fbbf24', // 温暖的金黄色
+            order: 10,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+      }
+      finalCategory = sourceId;
+    } catch (err) {
+      console.error('自动创建收藏夹分类失败:', err);
+    }
+  }
+
   // 检查是否已收藏
   const existing = await getFavoriteByQuestionId(question.id);
   
@@ -31,7 +59,7 @@ export async function addFavorite(
     // 更新分类
     const updated: FavoriteQuestion = {
       ...existing,
-      category,
+      category: finalCategory,
       notes: notes || existing.notes,
       updatedAt: new Date(),
     };
@@ -44,7 +72,7 @@ export async function addFavorite(
     id: `fav-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
     questionId: question.id,
     question,
-    category,
+    category: finalCategory,
     notes,
     sourceType,
     sourceId,

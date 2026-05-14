@@ -571,6 +571,18 @@ export default function FavoritesPage() {
                           >
                             取消收藏
                           </button>
+                          <button
+                            onClick={() => {
+                              sessionStorage.setItem('importedQuiz', JSON.stringify([item.question]));
+                              sessionStorage.setItem('currentArchiveId', 'favorites');
+                              sessionStorage.setItem('currentCategory', item.category || 'default');
+                              navigate('/quiz-practice');
+                            }}
+                            className="px-3 py-1 rounded text-sm"
+                            style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-primary)' }}
+                          >
+                            练习
+                          </button>
                         </div>
                       </div>
                     )}
