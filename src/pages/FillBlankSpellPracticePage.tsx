@@ -8,7 +8,6 @@ import type { FillBlankGameState, FillBlankItem, FillBlankSessionResult } from '
 import {
   checkFillBlankAnswer,
   generateSessionResult,
-  initializeFillBlankGame,
   nextFillBlankItem,
   showHint,
 } from '../services/learning/fillBlankGame';
@@ -28,6 +27,7 @@ export default function FillBlankSpellPracticePage() {
   const [fillBlankItems, setFillBlankItems] = useState<FillBlankItem[]>([]);
   const [gameState, setGameState] = useState<FillBlankGameState | null>(null);
   const [remainingItems, setRemainingItems] = useState<FillBlankItem[]>([]);
+  const [historyItems, setHistoryItems] = useState<FillBlankItem[]>([]);
   const [sessionResult, setSessionResult] = useState<FillBlankSessionResult | null>(null);
 
   const [mode, setMode] = useState<Mode>('question');
@@ -38,12 +38,17 @@ export default function FillBlankSpellPracticePage() {
 
   const isAnsweredRef = useRef(false);
   const isResultModeRef = useRef(false);
+  const isCorrectRef = useRef(false);
   const handleNextRef = useRef<() => void>(() => undefined);
+  const handlePrevRef = useRef<() => void>(() => undefined);
+  const handleRetryRef = useRef<() => void>(() => undefined);
+  const handleSubmitRef = useRef<() => void>(() => undefined);
+  const handleToggleFavoriteRef = useRef<() => void>(() => undefined);
 
   const progress = useMemo(() => {
     if (!fillBlankItems.length) return 0;
-    return fillBlankItems.length - remainingItems.length;
-  }, [fillBlankItems.length, remainingItems.length]);
+    return historyItems.length + 1;
+  }, [fillBlankItems.length, historyItems.length]);
 
   const progressPercent = useMemo(() => {
     if (!fillBlankItems.length) return 0;
@@ -63,11 +68,52 @@ export default function FillBlankSpellPracticePage() {
   }, [mode]);
 
   useEffect(() => {
+    isCorrectRef.current = !!gameState?.isCorrect;
+  }, [gameState?.isCorrect]);
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.isComposing) return;
-      if (e.key === 'Enter' && isAnsweredRef.current && !isResultModeRef.current) {
+      
+      // Ctrl key to favorite
+      if ((e.key === 'Control' || e.key === 'Meta') && !e.repeat) {
+        e.preventDefault();
+        handleToggleFavoriteRef.current();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        handleToggleFavoriteRef.current();
+        return;
+      }
+
+      if (isResultModeRef.current) return;
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        handlePrevRef.current();
+        return;
+      }
+
+      if (e.key === 'ArrowRight') {
         e.preventDefault();
         handleNextRef.current();
+        return;
+      }
+
+      if (!isAnsweredRef.current && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        handleSubmitRef.current();
+        return;
+      }
+
+      if (isAnsweredRef.current && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        if (isCorrectRef.current) {
+          handleNextRef.current();
+        } else {
+          handleRetryRef.current();
+        }
       }
     };
 
@@ -109,11 +155,26 @@ export default function FillBlankSpellPracticePage() {
   }
 
   function startGame(items: FillBlankItem[]) {
-    const initial = initializeFillBlankGame(items);
-    const remaining = [...items];
+    const shuffled = [...items].sort(() => Math.random() - 0.5);
+    const initial: FillBlankGameState = {
+      currentItem: shuffled[0] || null,
+      currentAnswer: '',
+      isAnswered: false,
+      isCorrect: false,
+      hints: [],
+      hintsUsed: 0,
+      score: 0,
+      streak: 0,
+      totalAttempts: 0,
+      correctAttempts: 0,
+      startTime: new Date(),
+    };
+    const remaining = [...shuffled];
     remaining.shift();
+    
     setGameState(initial);
     setRemainingItems(remaining);
+    setHistoryItems([]);
     setSessionResult(null);
     setMode('question');
     setInput('');
@@ -144,6 +205,10 @@ export default function FillBlankSpellPracticePage() {
   function handleNext() {
     if (!gameState) return;
 
+    if (gameState.currentItem) {
+      setHistoryItems(prev => [...prev, gameState.currentItem!]);
+    }
+
     const result = nextFillBlankItem(gameState, [...remainingItems]);
 
     if (result.isCompleted) {
@@ -161,8 +226,45 @@ export default function FillBlankSpellPracticePage() {
     refreshFavoriteState(result.gameState.currentItem);
   }
 
+  function handlePrev() {
+    if (!gameState || historyItems.length === 0) return;
+    
+    const newHistory = [...historyItems];
+    const prevItem = newHistory.pop()!;
+    
+    const newRemaining = [gameState.currentItem!, ...remainingItems];
+    
+    setHistoryItems(newHistory);
+    setRemainingItems(newRemaining);
+    setGameState({
+      ...gameState,
+      currentItem: prevItem,
+      isAnswered: false,
+      isCorrect: false,
+      currentAnswer: '',
+      hintsUsed: 0,
+      hints: [],
+    });
+    setInput('');
+    refreshFavoriteState(prevItem);
+  }
+
+  function handleRetry() {
+    if (!gameState) return;
+    setGameState({
+      ...gameState,
+      isAnswered: false,
+      isCorrect: false,
+    });
+    setInput('');
+  }
+
   useEffect(() => {
     handleNextRef.current = handleNext;
+    handlePrevRef.current = handlePrev;
+    handleRetryRef.current = handleRetry;
+    handleSubmitRef.current = handleSubmit;
+    handleToggleFavoriteRef.current = handleToggleFavorite;
   });
 
   function handleShowHint() {
@@ -289,15 +391,15 @@ export default function FillBlankSpellPracticePage() {
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-8">
+      <main className="max-w-4xl mx-auto px-4 py-12">
         {gameState.currentItem && (
           <>
-            <div className="rounded-lg p-6 mb-6" style={{ backgroundColor: 'var(--color-card)' }}>
-              <div className="flex items-center justify-between mb-4">
+            <div className="rounded-2xl p-8 mb-8 shadow-xl border border-gray-100 dark:border-gray-800 transition-all" style={{ backgroundColor: 'var(--color-card)' }}>
+              <div className="flex items-center justify-between mb-6">
                 <button
                   onClick={handleShowHint}
                   disabled={gameState.isAnswered || gameState.hintsUsed >= (gameState.currentItem.hints?.length || 0)}
-                  className="px-3 py-1 rounded text-sm disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl text-base font-medium disabled:opacity-50 transition-all hover:bg-opacity-80 active:scale-95"
                   style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-secondary)' }}
                 >
                   💡 提示 ({gameState.hintsUsed}/{gameState.currentItem.hints?.length || 0})
@@ -306,107 +408,112 @@ export default function FillBlankSpellPracticePage() {
                 <button
                   onClick={handleToggleFavorite}
                   disabled={favoriteLoading}
-                  className="px-3 py-1 rounded text-sm disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl text-base font-medium disabled:opacity-50 transition-all hover:bg-opacity-80 active:scale-95 shadow-sm"
                   style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-primary)' }}
                 >
                   {isFavorite ? '取消收藏' : '收藏'}
                 </button>
               </div>
 
-              <div className="text-lg leading-relaxed mb-4" style={{ color: 'var(--color-text)' }}>
+              <div className="text-2xl md:text-3xl font-bold leading-relaxed mb-8 tracking-wide" style={{ color: 'var(--color-text)' }}>
                 {gameState.currentItem.question}
               </div>
 
               {gameState.hints.length > 0 && (
-                <div className="space-y-2 mb-4">
+                <div className="space-y-3 mb-8">
                   {gameState.hints.map((hint, index) => (
-                    <div key={index} className="p-3 rounded text-sm" style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-secondary)' }}>
+                    <div key={index} className="p-4 rounded-xl text-base font-medium shadow-inner" style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-secondary)' }}>
                       💡 {hint}
                     </div>
                   ))}
                 </div>
               )}
 
-              <div className="space-y-3">
+              <div className="space-y-6">
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (!gameState.isAnswered) {
-                        handleSubmit();
-                      } else {
-                        handleNext();
-                      }
-                    }
-                  }}
                   readOnly={gameState.isAnswered}
                   aria-disabled={gameState.isAnswered}
-                  className="w-full px-3 py-2 rounded-lg"
+                  className="w-full px-6 py-4 rounded-xl text-xl md:text-2xl font-semibold shadow-inner focus:outline-none focus:ring-2 focus:ring-opacity-50 transition-all"
                   style={{
                     backgroundColor: 'var(--color-bg)',
                     color: 'var(--color-text)',
-                    border: '1px solid var(--color-border)',
+                    border: '2px solid var(--color-border)',
                     opacity: gameState.isAnswered ? 0.7 : 1,
                     cursor: gameState.isAnswered ? 'default' : 'text',
                   }}
-                  placeholder="请输入答案（回车提交/下一题）"
+                  placeholder="请输入答案（回车/空格提交）"
                 />
 
                 {!gameState.isAnswered ? (
                   <button
                     onClick={handleSubmit}
-                    disabled={!input.trim()}
-                    className="w-full py-3 rounded-lg font-medium text-white disabled:opacity-50"
+                    className="w-full py-4 rounded-xl text-xl font-bold text-white shadow-lg transition-all hover:opacity-90 hover:scale-[1.01] active:scale-[0.99]"
                     style={{ backgroundColor: 'var(--color-primary)' }}
                   >
-                    提交
+                    提交 (Enter / Space)
                   </button>
                 ) : (
                   <div
-                    className={`p-4 rounded-lg ${gameState.isCorrect ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}
+                    className={`p-6 rounded-2xl ${gameState.isCorrect ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'} shadow-md`}
                     style={{
                       backgroundColor: gameState.isCorrect ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                      border: `1px solid ${gameState.isCorrect ? 'var(--color-success)' : 'var(--color-error)'}`
+                      border: `2px solid ${gameState.isCorrect ? 'var(--color-success)' : 'var(--color-error)'}`
                     }}
                   >
-                    <div className="flex items-center gap-2 mb-2">
+                    <div className="flex items-center gap-3 mb-4">
                       {gameState.isCorrect ? (
                         <>
-                          <svg className="w-5 h-5" style={{ color: 'var(--color-success)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          <svg className="w-8 h-8" style={{ color: 'var(--color-success)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                           </svg>
-                          <span className="font-medium" style={{ color: 'var(--color-success)' }}>回答正确！</span>
+                          <span className="font-bold text-2xl" style={{ color: 'var(--color-success)' }}>回答正确！</span>
                         </>
                       ) : (
                         <>
-                          <svg className="w-5 h-5" style={{ color: 'var(--color-error)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          <svg className="w-8 h-8" style={{ color: 'var(--color-error)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
                           </svg>
-                          <span className="font-medium" style={{ color: 'var(--color-error)' }}>回答错误</span>
+                          <span className="font-bold text-2xl" style={{ color: 'var(--color-error)' }}>回答错误</span>
                         </>
                       )}
                     </div>
 
                     {!gameState.isCorrect && (
-                      <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
-                        正确答案：<span className="font-medium" style={{ color: 'var(--color-text)' }}>{gameState.currentItem.answer}</span>
+                      <p className="text-lg mb-4" style={{ color: 'var(--color-secondary)' }}>
+                        正确答案：<span className="font-bold text-2xl underline tracking-wider ml-1" style={{ color: 'var(--color-text)' }}>{gameState.currentItem.answer}</span>
                       </p>
                     )}
 
-                    <div className="mt-3">
-                      <button
-                        onClick={handleNext}
-                        className="w-full py-3 rounded-lg font-medium text-white mb-2"
-                        style={{ backgroundColor: 'var(--color-primary)' }}
-                      >
-                        {progress < fillBlankItems.length ? '下一题' : '查看结果'}
-                      </button>
-                      <p className="text-center text-sm" style={{ color: 'var(--color-secondary)' }}>
-                        按 Enter 键继续下一题
-                      </p>
+                    <div className="mt-6">
+                      {gameState.isCorrect ? (
+                        <>
+                          <button
+                            onClick={handleNext}
+                            className="w-full py-4 rounded-xl text-xl font-bold text-white mb-3 shadow-lg transition-all hover:opacity-90 hover:scale-[1.01] active:scale-[0.99]"
+                            style={{ backgroundColor: 'var(--color-primary)' }}
+                          >
+                            {progress < fillBlankItems.length ? '下一题' : '查看结果'}
+                          </button>
+                          <p className="text-center text-base font-medium" style={{ color: 'var(--color-secondary)' }}>
+                            按 <kbd className="px-3 py-1.5 bg-white dark:bg-gray-800 rounded-lg border shadow-sm mx-1 font-bold text-sm">Enter</kbd> 或 <kbd className="px-3 py-1.5 bg-white dark:bg-gray-800 rounded-lg border shadow-sm mx-1 font-bold text-sm">Space</kbd> 继续
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={handleRetry}
+                            className="w-full py-4 rounded-xl text-xl font-bold text-white mb-3 shadow-lg transition-all hover:opacity-90 hover:scale-[1.01] active:scale-[0.99]"
+                            style={{ backgroundColor: 'var(--color-error)' }}
+                          >
+                            重试
+                          </button>
+                          <p className="text-center text-base font-medium" style={{ color: 'var(--color-secondary)' }}>
+                            按 <kbd className="px-3 py-1.5 bg-white dark:bg-gray-800 rounded-lg border shadow-sm mx-1 font-bold text-sm">Enter</kbd> 或 <kbd className="px-3 py-1.5 bg-white dark:bg-gray-800 rounded-lg border shadow-sm mx-1 font-bold text-sm">Space</kbd> 重试
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
