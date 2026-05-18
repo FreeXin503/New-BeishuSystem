@@ -8,13 +8,26 @@ import {
   saveFavorite,
   deleteFavorite,
   getFavoriteByQuestionId,
+  getFavoriteByQuestionAndCategory,
   getFavoritesByCategory,
   getAllFavoriteCategories,
   saveFavoriteCategory,
   deleteFavoriteCategory,
-  getQuizArchiveById,
   getFavoriteCategoryById,
 } from '../storage/indexedDB';
+import { getArchive } from './quizArchive';
+
+export {
+  getAllFavorites,
+  saveFavorite,
+  deleteFavorite,
+  getFavoriteByQuestionId,
+  getFavoritesByCategory,
+  getAllFavoriteCategories,
+  saveFavoriteCategory,
+  deleteFavoriteCategory,
+  getFavoriteCategoryById,
+};
 
 /**
  * 添加收藏
@@ -28,12 +41,12 @@ export async function addFavorite(
 ): Promise<FavoriteQuestion> {
   let finalCategory = category;
 
-  // 如果来自特定的练习题组，为其自动建立对应的收藏夹
-  if (sourceType === 'quiz' && sourceId) {
+  // 如果没有指定分类或使用默认分类，且来自特定的练习题组，为其自动建立对应的收藏夹
+  if ((category === 'default' || category === 'other') && sourceType === 'quiz' && sourceId) {
     try {
       const catExists = await getFavoriteCategoryById(sourceId);
       if (!catExists) {
-        const archive = await getQuizArchiveById(sourceId);
+        const archive = await getArchive(sourceId);
         if (archive) {
           await saveFavoriteCategory({
             id: sourceId,
@@ -52,14 +65,13 @@ export async function addFavorite(
     }
   }
 
-  // 检查是否已收藏
-  const existing = await getFavoriteByQuestionId(question.id);
+  // 检查在目标分类中是否已收藏
+  const existing = await getFavoriteByQuestionAndCategory(question.id, finalCategory);
   
   if (existing) {
-    // 更新分类
+    // 如果在该分类中已存在，更新它（如更新时间或笔记）
     const updated: FavoriteQuestion = {
       ...existing,
-      category: finalCategory,
       notes: notes || existing.notes,
       updatedAt: new Date(),
     };

@@ -5,11 +5,13 @@
 
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { Question, ModeProgress } from '../types';
+import type { Question, ModeProgress, FavoriteCategory } from '../types';
 import { getOptionLabel, getScoreRating } from '../services/learning/quiz';
-import { updatePracticeRecord } from '../services/learning/quizArchive';
+import { updatePracticeRecord, getArchive } from '../services/learning/quizArchive';
 import { addWrongAnswers } from '../services/learning/wrongAnswer';
-import { toggleFavorite, isFavorited } from '../services/learning/favorite';
+import { toggleFavorite, isFavorited, getFavoriteCategoryById, getFavoriteCategories, addFavorite } from '../services/learning/favorite';
+import FavoriteCategoryPicker from '../components/learning/FavoriteCategoryPicker';
+import { saveQuizSession } from '../services/storage/indexedDB';
 
 export default function QuizPracticePage() {
   const navigate = useNavigate();
@@ -37,6 +39,13 @@ export default function QuizPracticePage() {
   const [wrongFavoriteMap, setWrongFavoriteMap] = useState<Map<string, boolean>>(new Map());
   const [batchFavLoading, setBatchFavLoading] = useState(false);
   const [batchFavSuccess, setBatchFavSuccess] = useState(false);
+  const [selectedWrongIds, setSelectedWrongIds] = useState<Set<string>>(new Set());
+  
+  // 收藏夹分类相关
+  const [activeFavCatId, setActiveFavCatId] = useState<string>('default');
+  const [activeFavCatName, setActiveFavCatName] = useState<string>('默认分类');
+  const [showCatPicker, setShowCatPicker] = useState(false);
+  const [targetQuestionForCat, setTargetQuestionForCat] = useState<Question | null>(null);
 
   // 在 isComplete 发生变化且为 true 时，初始化错题的收藏状态
   useEffect(() => {
@@ -54,19 +63,19 @@ export default function QuizPracticePage() {
   }, [isComplete]);
 
   const handleToggleWrongFavorite = async (question: Question) => {
-    const newStatus = await toggleFavorite(question, category, 'quiz', archiveId || undefined);
+    const newStatus = await toggleFavorite(question, activeFavCatId, 'quiz', archiveId || undefined);
     setWrongFavoriteMap(prev => new Map(prev).set(question.id, newStatus));
   };
 
   const handleBatchFavoriteWrong = async () => {
-    const wrongItems = getWrongQuestions();
+    const wrongItems = getWrongQuestions().filter(item => selectedWrongIds.has(item.question.id));
+    if (wrongItems.length === 0) return;
+
     setBatchFavLoading(true);
     try {
+      // 串行执行以避免潜在的竞态问题，并确保收藏夹已创建
       for (const item of wrongItems) {
-        const isFav = wrongFavoriteMap.get(item.question.id);
-        if (!isFav) {
-          await toggleFavorite(item.question, category, 'quiz', archiveId || undefined);
-        }
+        await addFavorite(item.question, activeFavCatId, 'quiz', archiveId || undefined);
       }
       
       const updatedMap = new Map(wrongFavoriteMap);
@@ -81,6 +90,38 @@ export default function QuizPracticePage() {
     }
   };
 
+  const toggleSelectWrong = (id: string) => {
+    setSelectedWrongIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllWrongs = () => {
+    const wrongItems = getWrongQuestions();
+    if (selectedWrongIds.size === wrongItems.length) {
+      setSelectedWrongIds(new Set());
+    } else {
+      setSelectedWrongIds(new Set(wrongItems.map(i => i.question.id)));
+    }
+  };
+
+  const handleSelectCategory = async (catId: string) => {
+    setActiveFavCatId(catId);
+    await loadCategoryName(catId);
+    setShowCatPicker(false);
+    
+    // 如果有目标题目，直接为该题目收藏
+    if (targetQuestionForCat) {
+      const newStatus = await toggleFavorite(targetQuestionForCat, catId, 'quiz', archiveId || undefined);
+      setFavoriteMap(prev => new Map(prev).set(targetQuestionForCat.id, newStatus));
+      setWrongFavoriteMap(prev => new Map(prev).set(targetQuestionForCat.id, newStatus));
+      setTargetQuestionForCat(null);
+    }
+  };
+
   useEffect(() => {
     const stored = sessionStorage.getItem('importedQuiz');
     const storedArchiveId = sessionStorage.getItem('currentArchiveId');
@@ -92,7 +133,12 @@ export default function QuizPracticePage() {
         setQuestions(parsed);
         
         let actualArchiveId = storedArchiveId || null;
-        if (storedArchiveId) setArchiveId(storedArchiveId);
+        if (storedArchiveId) {
+          setArchiveId(storedArchiveId);
+          // 默认收藏夹设置为当前题库ID（对应题库名的收藏夹）
+          setActiveFavCatId(storedArchiveId);
+          loadCategoryName(storedArchiveId);
+        }
         
         if (storedCategory) setCategory(storedCategory);
         else setCategory('other');
@@ -106,7 +152,7 @@ export default function QuizPracticePage() {
         if (saved) {
           try {
             const progressData = JSON.parse(saved);
-            if (progressData && typeof progressData.currentIndex === 'number' && progressData.currentIndex < parsed.length) {
+            if (progressData && progressData.quizId === parsed[0]?.id && typeof progressData.currentIndex === 'number' && progressData.currentIndex < parsed.length) {
               setSavedProgressData(progressData);
               setShowProgressModal(true);
             }
@@ -121,6 +167,30 @@ export default function QuizPracticePage() {
       navigate('/quiz-import');
     }
   }, [navigate]);
+
+  async function loadCategoryName(id: string) {
+    try {
+      const cat = await getFavoriteCategoryById(id);
+      if (cat) {
+        setActiveFavCatName(cat.name);
+      } else if (id === 'default') {
+        setActiveFavCatName('默认分类');
+      } else if (id === 'favorites') {
+        setActiveFavCatName('收藏练习');
+      } else {
+        // 尝试从题库中获取标题
+        const archive = await getArchive(id);
+        if (archive) {
+          setActiveFavCatName(archive.title);
+        } else {
+          setActiveFavCatName('未命名分类');
+        }
+      }
+    } catch (err) {
+      console.error('加载分类名称失败:', err);
+      setActiveFavCatName('默认分类');
+    }
+  }
 
   const handleResumeProgress = () => {
     if (savedProgressData) {
@@ -152,6 +222,7 @@ export default function QuizPracticePage() {
     
     const key = `quiz-progress-${archiveId || 'temp'}`;
     const progressData = {
+      quizId: questions[0]?.id,
       currentIndex,
       answers: Array.from(answers.entries()),
       wrongAnswers: Array.from(wrongAnswers.entries()),
@@ -171,7 +242,7 @@ export default function QuizPracticePage() {
   }
 
   async function handleToggleFavorite(question: Question) {
-    const newStatus = await toggleFavorite(question, category, 'quiz', archiveId || undefined);
+    const newStatus = await toggleFavorite(question, activeFavCatId, 'quiz', archiveId || undefined);
     setFavoriteMap(prev => new Map(prev).set(question.id, newStatus));
   }
 
@@ -239,13 +310,35 @@ export default function QuizPracticePage() {
     finishQuiz();
   };
 
-  const finishQuiz = () => {
+  const finishQuiz = async () => {
     setIsComplete(true);
     localStorage.removeItem(`quiz-progress-${archiveId || 'temp'}`);
+    
+    const results = calculateResults();
+    const score = results.total > 0 ? Math.round((results.correct / results.total) * 100) : 0;
+    
     if (archiveId) {
-      const results = calculateResults();
-      const score = results.total > 0 ? Math.round((results.correct / results.total) * 100) : 0;
       updatePracticeRecord(archiveId, score);
+    }
+
+    // 保存练习记录
+    try {
+      const wrongItems = getWrongQuestions();
+      const archive = archiveId ? await getArchive(archiveId) : null;
+      
+      await saveQuizSession({
+        id: `session-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+        archiveId,
+        title: archive?.title || '临时练习',
+        totalQuestions: questions.length,
+        correctAnswers: results.correct,
+        score,
+        completedAt: new Date(),
+        wrongItems,
+      });
+      console.log('练习记录已保存');
+    } catch (err) {
+      console.error('保存练习记录失败:', err);
     }
   };
 
@@ -327,9 +420,10 @@ export default function QuizPracticePage() {
           finishQuiz();
         }
       }
-      // Space: confirm or next/retry
-      if (e.code === 'Space') {
+      // Space, Enter or Shift: confirm or next/retry
+      if (e.code === 'Space' || e.key === 'Enter' || e.key === 'Shift') {
         e.preventDefault(); // Prevent page scrolling
+        if (e.repeat) return;
         if (!showResult) {
           handleSubmit();
         } else {
@@ -431,62 +525,108 @@ export default function QuizPracticePage() {
           </div>
 
 
-          {/* 错题详情 */}
           {wrongItems.length > 0 && (
             <div className="mt-8">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6">
-                <h3 className="text-xl font-bold" style={{ color: 'var(--color-text)' }}>错题回顾</h3>
-                <button
-                  onClick={handleBatchFavoriteWrong}
-                  disabled={batchFavLoading}
-                  className="px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2 transition-all shadow-sm active:scale-95 disabled:opacity-50"
-                  style={{ backgroundColor: 'rgba(251, 191, 36, 0.1)', color: '#fbbf24', border: '1px solid #fbbf24' }}
-                >
-                  ⭐ {batchFavLoading ? '处理中...' : batchFavSuccess ? '全部收藏成功！' : '一键收藏所有错题'}
-                </button>
+              <div className="flex flex-col gap-6 mb-6">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                  <h3 className="text-xl font-bold" style={{ color: 'var(--color-text)' }}>错题回顾</h3>
+                  
+                  <div className="flex items-center gap-3 w-full sm:w-auto">
+                    <button
+                      onClick={() => setShowCatPicker(true)}
+                      className="px-4 py-2 rounded-lg text-sm font-medium border flex items-center gap-2 bg-white hover:bg-gray-50 transition-all flex-1 sm:flex-initial"
+                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+                    >
+                      📁 目标收藏夹: <span style={{ color: 'var(--color-primary)' }}>{activeFavCatName}</span>
+                    </button>
+                    
+                    <button
+                      onClick={handleBatchFavoriteWrong}
+                      disabled={batchFavLoading || selectedWrongIds.size === 0}
+                      className="px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2 transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:grayscale flex-1 sm:flex-initial"
+                      style={{ backgroundColor: 'rgba(251, 191, 36, 0.1)', color: '#fbbf24', border: '1px solid #fbbf24' }}
+                    >
+                      ⭐ {batchFavLoading ? '处理中...' : batchFavSuccess ? '收藏成功！' : `收藏选中的 ${selectedWrongIds.size} 题`}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 p-4 rounded-xl" style={{ backgroundColor: 'var(--color-bg)' }}>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="w-5 h-5 rounded border-gray-300 text-primary focus:ring-primary"
+                      checked={selectedWrongIds.size === wrongItems.length && wrongItems.length > 0}
+                      onChange={toggleSelectAllWrongs}
+                    />
+                    <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>全选所有错题</span>
+                  </label>
+                  <span className="text-sm" style={{ color: 'var(--color-secondary)' }}>
+                    已选择 {selectedWrongIds.size} / {wrongItems.length}
+                  </span>
+                </div>
               </div>
+
               <div className="space-y-4">
                 {wrongItems.map((item, index) => {
                   const isFav = wrongFavoriteMap.get(item.question.id);
+                  const isSelected = selectedWrongIds.has(item.question.id);
                   return (
-                    <div key={item.question.id} className="p-6 rounded-xl relative transition-all shadow-sm hover:shadow-md" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}>
-                      {/* 单题收藏星标按钮 */}
-                      <button
-                        onClick={() => handleToggleWrongFavorite(item.question)}
-                        className="absolute top-5 right-5 p-2 rounded-full hover:bg-opacity-80 transition-all"
-                        title={isFav ? '取消收藏' : '收藏此题'}
-                      >
-                        <svg className="w-6 h-6" fill={isFav ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24" style={{ color: isFav ? '#fbbf24' : 'var(--color-secondary)' }}>
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                        </svg>
-                      </button>
-
-                      <p className="font-bold text-lg mb-4 pr-12 text-left" style={{ color: 'var(--color-text)' }}>{index + 1}. {item.question.question}</p>
-                      <div className="space-y-2 text-left">
-                        {item.question.options.map((opt, optIndex) => {
-                          const isUserAnswer = opt === item.userAnswer;
-                          const isCorrect = opt === item.question.correctAnswer;
-                          let bgColor = 'var(--color-bg)';
-                          let textColor = 'var(--color-text)';
-                          let borderColor = 'var(--color-border)';
-                          if (isCorrect) { bgColor = 'rgba(16, 185, 129, 0.1)'; textColor = 'var(--color-success)'; borderColor = 'var(--color-success)'; }
-                          else if (isUserAnswer) { bgColor = 'rgba(239, 68, 68, 0.1)'; textColor = 'var(--color-error)'; borderColor = 'var(--color-error)'; }
-                          return (
-                            <div key={optIndex} className="px-4 py-3 rounded-lg text-md font-medium" style={{ backgroundColor: bgColor, color: textColor, border: `1px solid ${borderColor}` }}>
-                              {getOptionLabel(optIndex)}. {opt}
-                              {isCorrect && ' ✓ 正确答案'}
-                              {isUserAnswer && !isCorrect && ' ✗ 你的答案'}
-                            </div>
-                          );
-                        })}
+                    <div key={item.question.id} className="p-6 rounded-xl relative transition-all shadow-sm hover:shadow-md flex gap-4" style={{ backgroundColor: 'var(--color-card)', border: isSelected ? '2px solid var(--color-primary)' : '1px solid var(--color-border)' }}>
+                      <div className="pt-1">
+                        <input 
+                          type="checkbox" 
+                          className="w-5 h-5 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                          checked={isSelected}
+                          onChange={() => toggleSelectWrong(item.question.id)}
+                        />
                       </div>
-                      {item.question.explanation && <p className="mt-4 text-sm leading-relaxed text-left" style={{ color: 'var(--color-secondary)' }}>💡 <strong>解析：</strong>{item.question.explanation}</p>}
+                      
+                      <div className="flex-1">
+                        {/* 单题收藏星标按钮 */}
+                        <button
+                          onClick={() => handleToggleWrongFavorite(item.question)}
+                          className="absolute top-5 right-5 p-2 rounded-full hover:bg-opacity-80 transition-all"
+                          title={isFav ? '取消收藏' : '收藏此题'}
+                        >
+                          <svg className="w-6 h-6" fill={isFav ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24" style={{ color: isFav ? '#fbbf24' : 'var(--color-secondary)' }}>
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                          </svg>
+                        </button>
+
+                        <p className="font-bold text-lg mb-4 pr-12 text-left" style={{ color: 'var(--color-text)' }}>{index + 1}. {item.question.question}</p>
+                        <div className="space-y-2 text-left">
+                          {item.question.options.map((opt, optIndex) => {
+                            const isUserAnswer = opt === item.userAnswer;
+                            const isCorrect = opt === item.question.correctAnswer;
+                            let bgColor = 'var(--color-bg)';
+                            let textColor = 'var(--color-text)';
+                            let borderColor = 'var(--color-border)';
+                            if (isCorrect) { bgColor = 'rgba(16, 185, 129, 0.1)'; textColor = 'var(--color-success)'; borderColor = 'var(--color-success)'; }
+                            else if (isUserAnswer) { bgColor = 'rgba(239, 68, 68, 0.1)'; textColor = 'var(--color-error)'; borderColor = 'var(--color-error)'; }
+                            return (
+                              <div key={optIndex} className="px-4 py-3 rounded-lg text-md font-medium" style={{ backgroundColor: bgColor, color: textColor, border: `1px solid ${borderColor}` }}>
+                                {getOptionLabel(optIndex)}. {opt}
+                                {isCorrect && ' ✓ 正确答案'}
+                                {isUserAnswer && !isCorrect && ' ✗ 你的答案'}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {item.question.explanation && <p className="mt-4 text-sm leading-relaxed text-left" style={{ color: 'var(--color-secondary)' }}>💡 <strong>解析：</strong>{item.question.explanation}</p>}
+                      </div>
                     </div>
                   );
                 })}
               </div>
             </div>
           )}
+          <FavoriteCategoryPicker
+            isOpen={showCatPicker}
+            onClose={() => { setShowCatPicker(false); setTargetQuestionForCat(null); }}
+            onSelect={handleSelectCategory}
+            initialCategoryId={activeFavCatId}
+          />
         </div>
       </div>
     );
@@ -571,15 +711,24 @@ export default function QuizPracticePage() {
 
       <main className="max-w-5xl mx-auto px-4 py-10">
         <div className="rounded-xl p-10 mb-8 relative transition-all shadow-md hover:shadow-lg" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}>
-          <button
-            onClick={() => handleToggleFavorite(currentQuestion)}
-            className="absolute top-5 right-5 p-2 rounded-full hover:opacity-85 transition-all"
-            title={favoriteMap.get(currentQuestion.id) ? '取消收藏' : '收藏题目'}
-          >
-            <svg className="w-7 h-7" fill={favoriteMap.get(currentQuestion.id) ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24" style={{ color: favoriteMap.get(currentQuestion.id) ? '#fbbf24' : 'var(--color-secondary)' }}>
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-            </svg>
-          </button>
+          <div className="absolute top-5 right-5 flex flex-col items-end gap-2">
+            <button
+              onClick={() => handleToggleFavorite(currentQuestion)}
+              className="p-2 rounded-full hover:opacity-85 transition-all shadow-sm bg-white"
+              title={favoriteMap.get(currentQuestion.id) ? '取消收藏' : '收藏题目'}
+            >
+              <svg className="w-7 h-7" fill={favoriteMap.get(currentQuestion.id) ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24" style={{ color: favoriteMap.get(currentQuestion.id) ? '#fbbf24' : 'var(--color-secondary)' }}>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+              </svg>
+            </button>
+            <button 
+              onClick={() => { setTargetQuestionForCat(currentQuestion); setShowCatPicker(true); }}
+              className="text-[10px] px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 transition-colors"
+              style={{ color: 'var(--color-secondary)' }}
+            >
+              📂 {activeFavCatName}
+            </button>
+          </div>
           <p className="text-2xl leading-relaxed pr-12 font-bold" style={{ color: 'var(--color-text)' }}>{currentQuestion.question}</p>
         </div>
 
@@ -655,6 +804,12 @@ export default function QuizPracticePage() {
           </button>
         )}
       </main>
+      <FavoriteCategoryPicker
+        isOpen={showCatPicker}
+        onClose={() => { setShowCatPicker(false); setTargetQuestionForCat(null); }}
+        onSelect={handleSelectCategory}
+        initialCategoryId={activeFavCatId}
+      />
     </div>
   );
 }

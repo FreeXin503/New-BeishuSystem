@@ -2,10 +2,10 @@
  * IndexedDB 存储服务
  */
 
-import type { ParsedContent, ReviewCard, StudySession, UserSettings, SyncItem, ScoreRecord, LogicChain, QuizArchive, WrongAnswer, FillBlankItem, FillBlankSessionResult, FillBlankFavorite, FillBlankWrongAnswer, FavoriteQuestion, FavoriteCategory, FillBlankImportRecord } from '../../types';
+import type { ParsedContent, ReviewCard, StudySession, UserSettings, SyncItem, ScoreRecord, LogicChain, QuizArchive, WrongAnswer, FillBlankItem, FillBlankSessionResult, FillBlankFavorite, FillBlankWrongAnswer, FavoriteQuestion, FavoriteCategory, FillBlankImportRecord, QuizSessionResult } from '../../types';
 
 const DB_NAME = 'politics-study-db';
-const DB_VERSION = 8;
+const DB_VERSION = 9;
 
 // Store 名称
 const STORES = {
@@ -26,6 +26,7 @@ const STORES = {
   FILL_BLANK_FAVORITES: 'fillBlankFavorites',
   FILL_BLANK_WRONG_ANSWERS: 'fillBlankWrongAnswers',
   FILL_BLANK_IMPORT_RECORDS: 'fillBlankImportRecords',
+  QUIZ_SESSIONS: 'quizSessions',
 } as const;
 
 let db: IDBDatabase | null = null;
@@ -164,6 +165,12 @@ export async function openDatabase(): Promise<IDBDatabase> {
         const importStore = database.createObjectStore(STORES.FILL_BLANK_IMPORT_RECORDS, { keyPath: 'id' });
         importStore.createIndex('createdAt', 'createdAt', { unique: false });
         importStore.createIndex('category', 'category', { unique: false });
+      }
+      // 新增：选择题练习会话记录
+      if (!database.objectStoreNames.contains(STORES.QUIZ_SESSIONS)) {
+        const sessionStore = database.createObjectStore(STORES.QUIZ_SESSIONS, { keyPath: 'id' });
+        sessionStore.createIndex('archiveId', 'archiveId', { unique: false });
+        sessionStore.createIndex('completedAt', 'completedAt', { unique: false });
       }
     };
   });
@@ -535,6 +542,21 @@ export async function getFavoriteByQuestionId(questionId: string): Promise<Favor
   });
 }
 
+export async function getFavoriteByQuestionAndCategory(questionId: string, category: string): Promise<FavoriteQuestion | null> {
+  const store = await getStore(STORES.FAVORITES);
+  const index = store.index('questionId');
+  
+  return new Promise((resolve, reject) => {
+    const request = index.getAll(questionId);
+    request.onsuccess = () => {
+      const results = request.result as FavoriteQuestion[];
+      const match = results.find(item => item.category === category);
+      resolve(match || null);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
 // ==================== Favorite Categories ====================
 
 export async function getAllFavoriteCategories(): Promise<FavoriteCategory[]> {
@@ -736,6 +758,36 @@ export async function deleteFillBlankImportRecord(id: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = store.delete(id);
     request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+// ==================== Quiz Sessions CRUD ====================
+
+export async function saveQuizSession(session: QuizSessionResult): Promise<void> {
+  const store = await getStore(STORES.QUIZ_SESSIONS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const request = store.put(session);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getAllQuizSessions(): Promise<QuizSessionResult[]> {
+  const store = await getStore(STORES.QUIZ_SESSIONS);
+  const index = store.index('completedAt');
+  return new Promise((resolve, reject) => {
+    const request = index.getAll();
+    request.onsuccess = () => resolve(request.result.reverse());
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getQuizSession(id: string): Promise<QuizSessionResult | null> {
+  const store = await getStore(STORES.QUIZ_SESSIONS);
+  return new Promise((resolve, reject) => {
+    const request = store.get(id);
+    request.onsuccess = () => resolve(request.result || null);
     request.onerror = () => reject(request.error);
   });
 }

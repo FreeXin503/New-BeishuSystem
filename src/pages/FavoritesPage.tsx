@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import type { FavoriteCategory, FavoriteQuestion, FavoriteStats } from '../types';
+import type { FavoriteCategory, FavoriteQuestion, FavoriteStats, QuizSessionResult, Question } from '../types';
 import {
   createFavoriteCategory,
   getFavoriteCategories,
@@ -10,12 +10,12 @@ import {
   updateFavoriteCategory,
   updateFavoriteCategoryInfo,
 } from '../services/learning/favorite';
-import { getAllFavorites, getFavoritesByCategory } from '../services/storage/indexedDB';
+import { getAllFavorites, getFavoritesByCategory, getAllQuizSessions } from '../services/storage/indexedDB';
 import { getOptionLabel } from '../services/learning/quiz';
 import { useToast } from '../components/ui';
 import { trackEvent } from '../services/statistics/eventTracker';
 
-type ViewMode = 'stats' | 'list';
+type ViewMode = 'stats' | 'list' | 'history';
 
 const sortFavorites = (items: FavoriteQuestion[]) =>
   [...items].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -32,6 +32,8 @@ export default function FavoritesPage() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [history, setHistory] = useState<QuizSessionResult[]>([]);
+  const [selectedHistory, setSelectedHistory] = useState<QuizSessionResult | null>(null);
 
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState<FavoriteCategory | null>(null);
@@ -42,6 +44,7 @@ export default function FavoritesPage() {
   const [showMoveModal, setShowMoveModal] = useState(false);
   const [movingFavorite, setMovingFavorite] = useState<FavoriteQuestion | null>(null);
   const [entryMessage, setEntryMessage] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadData();
@@ -73,15 +76,17 @@ export default function FavoritesPage() {
   async function loadData() {
     setLoading(true);
     try {
-      const [statsData, categoryData, allFavorites] = await Promise.all([
+      const [statsData, categoryData, allFavorites, historyData] = await Promise.all([
         getFavoriteStats(),
         getFavoriteCategories(),
         getAllFavorites(),
+        getAllQuizSessions(),
       ]);
 
       setStats(statsData);
       setCategories(categoryData);
       setFavorites(sortFavorites(allFavorites));
+      setHistory(historyData);
     } catch (error) {
       console.error('加载收藏数据失败:', error);
       toast.error('加载收藏失败，请重试');
@@ -174,18 +179,72 @@ export default function FavoritesPage() {
   }
 
   async function handleMove(categoryId: string) {
-    if (!movingFavorite) return;
-
-    await updateFavoriteCategory(movingFavorite.questionId, categoryId);
-    setShowMoveModal(false);
-    setMovingFavorite(null);
-    toast.success('分类已更新');
-    trackEvent('favorites_move_success', { to: categoryId });
-
-    await loadData();
-    if (selectedCategory) {
-      await handleFilterByCategory(selectedCategory);
+    setLoading(true);
+    try {
+      if (movingFavorite) {
+        await updateFavoriteCategory(movingFavorite.questionId, categoryId);
+        trackEvent('favorites_move_success', { to: categoryId });
+      } else if (selectedIds.size > 0) {
+        for (const qId of selectedIds) {
+          await updateFavoriteCategory(qId, categoryId);
+        }
+        setSelectedIds(new Set());
+        trackEvent('favorites_batch_move_success', { to: categoryId, count: selectedIds.size });
+      }
+      setShowMoveModal(false);
+      setMovingFavorite(null);
+      toast.success('分类已更新');
+      await loadData();
+      if (selectedCategory) {
+        await handleFilterByCategory(selectedCategory);
+      }
+    } catch (error) {
+      console.error('移动分类失败:', error);
+      toast.error('移动分类失败');
+    } finally {
+      setLoading(false);
     }
+  }
+
+  const toggleSelect = (questionId: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(questionId)) next.delete(questionId);
+      else next.add(questionId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === favorites.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(favorites.map(f => f.questionId)));
+    }
+  };
+
+  async function handleBatchDelete() {
+    if (!confirm(`确定要取消收藏选中的 ${selectedIds.size} 道题吗？`)) return;
+    
+    setLoading(true);
+    try {
+      for (const qId of selectedIds) {
+        await removeFavorite(qId);
+      }
+      toast.success('批量取消收藏成功');
+      setSelectedIds(new Set());
+      await loadData();
+    } catch (error) {
+      console.error('批量删除失败:', error);
+      toast.error('批量删除失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleBatchMove() {
+    setMovingFavorite(null);
+    setShowMoveModal(true);
   }
 
   function getCategoryName(categoryId: string) {
@@ -390,6 +449,23 @@ export default function FavoritesPage() {
           </div>
         </div>
 
+        <div className="flex gap-2 mb-6 p-1 rounded-lg" style={{ backgroundColor: 'var(--color-card)' }}>
+          <button
+            onClick={() => setViewMode('stats')}
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${viewMode === 'stats' ? 'bg-primary text-white' : 'text-secondary hover:bg-gray-100'}`}
+            style={{ backgroundColor: viewMode === 'stats' ? 'var(--color-primary)' : 'transparent', color: viewMode === 'stats' ? 'white' : 'var(--color-secondary)' }}
+          >
+            分类管理
+          </button>
+          <button
+            onClick={() => setViewMode('history')}
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${viewMode === 'history' ? 'bg-primary text-white' : 'text-secondary hover:bg-gray-100'}`}
+            style={{ backgroundColor: viewMode === 'history' ? 'var(--color-primary)' : 'transparent', color: viewMode === 'history' ? 'white' : 'var(--color-secondary)' }}
+          >
+            练习历史
+          </button>
+        </div>
+
         {favorites.length > 0 && viewMode === 'list' && (
           <button
             onClick={() => {
@@ -492,6 +568,38 @@ export default function FavoritesPage() {
               </span>
             </div>
 
+            {favorites.length > 0 && (
+              <div className="mb-4 flex items-center justify-between p-3 rounded-lg" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    checked={selectedIds.size === favorites.length && favorites.length > 0}
+                    onChange={toggleSelectAll}
+                  />
+                  <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>全选</span>
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleBatchMove}
+                    disabled={selectedIds.size === 0}
+                    className="px-3 py-1 rounded text-sm text-white disabled:opacity-50 transition-colors"
+                    style={{ backgroundColor: 'var(--color-primary)' }}
+                  >
+                    批量移动
+                  </button>
+                  <button
+                    onClick={handleBatchDelete}
+                    disabled={selectedIds.size === 0}
+                    className="px-3 py-1 rounded text-sm text-white disabled:opacity-50 transition-colors"
+                    style={{ backgroundColor: 'var(--color-error)' }}
+                  >
+                    批量删除
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-4">
               {favorites.length === 0 ? (
                 <div className="text-center py-12" style={{ color: 'var(--color-secondary)' }}>
@@ -504,13 +612,20 @@ export default function FavoritesPage() {
                     className="rounded-lg"
                     style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}
                   >
-                    <div
-                      className="p-4 cursor-pointer"
-                      onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <p className="font-medium mb-1" style={{ color: 'var(--color-text)' }}>
+                    <div className="flex items-center gap-3 p-4">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                        checked={selectedIds.has(item.questionId)}
+                        onChange={() => toggleSelect(item.questionId)}
+                      />
+                      <div
+                        className="flex-1 cursor-pointer"
+                        onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <p className="font-medium mb-1" style={{ color: 'var(--color-text)' }}>
                             {item.question.question}
                           </p>
                           <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
@@ -528,8 +643,9 @@ export default function FavoritesPage() {
                         </svg>
                       </div>
                     </div>
+                  </div>
 
-                    {expandedId === item.id && (
+                  {expandedId === item.id && (
                       <div className="px-4 pb-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
                         <div className="pt-4 space-y-2">
                           {item.question.options.map((option, idx) => {
@@ -607,6 +723,122 @@ export default function FavoritesPage() {
             >
               去做题
             </Link>
+          </div>
+        )}
+
+        {viewMode === 'history' && (
+          <div className="space-y-4">
+            <h2 className="text-lg font-medium mb-3" style={{ color: 'var(--color-text)' }}>练习历史</h2>
+            {history.length === 0 ? (
+              <div className="text-center py-12" style={{ color: 'var(--color-secondary)' }}>
+                暂无练习记录
+              </div>
+            ) : (
+              history.map((session) => (
+                <div
+                  key={session.id}
+                  className="p-4 rounded-lg cursor-pointer transition-all hover:shadow-md"
+                  style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}
+                  onClick={() => setSelectedHistory(session)}
+                >
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="font-medium" style={{ color: 'var(--color-text)' }}>{session.title}</p>
+                      <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
+                        {new Date(session.completedAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-bold" style={{ color: session.score >= 60 ? 'var(--color-success)' : 'var(--color-error)' }}>
+                        {session.score} 分
+                      </p>
+                      <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
+                        正确率: {session.correctAnswers}/{session.totalQuestions}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* 历史记录详情模态框 */}
+        {selectedHistory && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-3xl max-h-[80vh] overflow-y-auto p-6 shadow-xl">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-bold" style={{ color: 'var(--color-text)' }}>练习结算详情</h3>
+                <button
+                  onClick={() => setSelectedHistory(null)}
+                  className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* 结算卡片 */}
+              <div className="text-center mb-6 p-6 rounded-lg" style={{ backgroundColor: 'var(--color-bg)' }}>
+                <div className="text-5xl font-bold mb-2" style={{ color: selectedHistory.score >= 60 ? 'var(--color-success)' : 'var(--color-error)' }}>
+                  {selectedHistory.score}
+                </div>
+                <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
+                  正确率: {selectedHistory.correctAnswers}/{selectedHistory.totalQuestions}
+                </p>
+                <p className="text-xs mt-1" style={{ color: 'var(--color-secondary)' }}>
+                  {new Date(selectedHistory.completedAt).toLocaleString()}
+                </p>
+              </div>
+
+              {/* 错题回顾 */}
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="font-medium" style={{ color: 'var(--color-text)' }}>
+                    错题回顾 ({selectedHistory.wrongItems.length})
+                  </h4>
+                </div>
+                {selectedHistory.wrongItems.length === 0 ? (
+                  <p className="text-center py-4" style={{ color: 'var(--color-success)' }}>太棒了，本次没有错题！</p>
+                ) : (
+                  <div className="space-y-4">
+                    {selectedHistory.wrongItems.map((item: { question: Question; userAnswer: string }, idx: number) => (
+                      <div key={idx} className="p-4 rounded-lg" style={{ backgroundColor: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                        <p className="font-medium mb-2" style={{ color: 'var(--color-text)' }}>
+                          {idx + 1}. {item.question.question}
+                        </p>
+                        <div className="space-y-1 mb-2">
+                          {item.question.options.map((opt: string, oIdx: number) => {
+                            const isCorrect = opt === item.question.correctAnswer;
+                            const isUser = opt === item.userAnswer;
+                            return (
+                              <div
+                                key={oIdx}
+                                className="text-sm p-2 rounded"
+                                style={{
+                                  backgroundColor: isCorrect ? 'rgba(16,185,129,0.1)' : isUser ? 'rgba(239,68,68,0.1)' : 'transparent',
+                                  color: isCorrect ? 'var(--color-success)' : isUser ? 'var(--color-error)' : 'var(--color-text)',
+                                }}
+                              >
+                                {getOptionLabel(oIdx)}. {opt}
+                                {isCorrect && ' (正确答案)'}
+                                {isUser && !isCorrect && ' (你的答案)'}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {item.question.explanation && (
+                          <div className="text-xs p-2 rounded mt-2" style={{ backgroundColor: 'var(--color-card)', color: 'var(--color-secondary)' }}>
+                            解析：{item.question.explanation}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </main>

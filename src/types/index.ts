@@ -364,6 +364,18 @@ export interface FillBlankSessionResult {
   completedAt: Date;
 }
 
+// 选择题练习会话结果
+export interface QuizSessionResult {
+  id: string;
+  archiveId: string | null;
+  title: string;
+  totalQuestions: number;
+  correctAnswers: number;
+  score: number;
+  completedAt: Date;
+  wrongItems: Array<{ question: Question; userAnswer: string }>;
+}
+
 // 填空题学习进度
 export interface FillBlankProgress {
   itemId: string;

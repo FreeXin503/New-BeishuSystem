@@ -119,7 +119,7 @@ export default function FillBlankPracticePage() {
         if (saved) {
           try {
             const progressData = JSON.parse(saved);
-            if (progressData && typeof progressData.currentIndex === 'number' && progressData.currentIndex < parsed.length) {
+            if (progressData && progressData.quizId === parsed[0]?.id && typeof progressData.currentIndex === 'number' && progressData.currentIndex < parsed.length) {
               setSavedProgressData(progressData);
               setShowProgressModal(true);
             } else {
@@ -180,6 +180,7 @@ export default function FillBlankPracticePage() {
     
     const key = `fill-blank-progress-${archiveId || 'temp'}`;
     const progressData = {
+      quizId: questions[0]?.id,
       currentIndex,
       answers: Array.from(answers.entries()),
       wrongAnswers: Array.from(wrongAnswers.entries()),
@@ -381,9 +382,10 @@ export default function FillBlankPracticePage() {
           finishQuiz();
         }
       }
-      // Space: confirm or next/retry
-      if (e.code === 'Space') {
+      // Space, Enter or Shift: confirm or next/retry
+      if (e.code === 'Space' || e.key === 'Enter' || e.key === 'Shift') {
         e.preventDefault();
+        if (e.repeat) return;
         if (!showResult) {
           handleSubmit();
         } else {
