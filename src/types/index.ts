@@ -139,7 +139,7 @@ export interface StudySession {
   endedAt: Date | null;
 }
 
-export type LearningMode = 'fill-blank' | 'quiz' | 'matching' | 'mnemonic' | 'speech' | 'logic-chain';
+export type LearningMode = 'fill-blank' | 'quiz' | 'matching' | 'mnemonic' | 'speech' | 'logic-chain' | 'tutor';
 
 // 得分记录
 export interface ScoreRecord {

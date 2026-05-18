@@ -317,12 +317,11 @@ export default function QuizPracticePage() {
     const results = calculateResults();
     const score = results.total > 0 ? Math.round((results.correct / results.total) * 100) : 0;
     
-    if (archiveId) {
-      updatePracticeRecord(archiveId, score);
-    }
-
     // 保存练习记录
     try {
+      if (archiveId) {
+        await updatePracticeRecord(archiveId, score);
+      }
       const wrongItems = getWrongQuestions();
       const archive = archiveId ? await getArchive(archiveId) : null;
       

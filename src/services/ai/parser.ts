@@ -9,6 +9,7 @@ import {
   GENERATE_MNEMONIC_PROMPT,
   GENERATE_FILL_BLANK_PROMPT,
   GENERATE_MATCHING_PROMPT,
+  GENERATE_WEAKNESS_ANALYSIS_PROMPT,
   AIServiceError,
 } from './deepseek';
 import type {
@@ -376,5 +377,59 @@ export async function generateLearningMaterials(content: ParsedContent): Promise
   return {
     questions,
     matchingPairs,
+  };
+}
+
+/**
+ * 针对错题生成智能弱点解析
+ */
+export async function generateWeaknessAnalysis(
+  wrongItems: { question: Question; userAnswer: string }[]
+): Promise<{
+  analysis: string;
+  mnemonic: string;
+  customQuestions: Question[];
+}> {
+  if (!wrongItems || wrongItems.length === 0) {
+    throw new AIServiceError('没有需要分析的错题', 'PARSE_ERROR', false);
+  }
+
+  // 构建 prompt 上下文
+  const contextText = wrongItems.map((item, index) => {
+    return `错题 ${index + 1}：${item.question.question}
+正确答案：${item.question.correctAnswer}
+学生错误答案：${item.userAnswer}
+原题解析：${item.question.explanation}`;
+  }).join('\n\n');
+
+  const response = await callDeepSeekWithRetry(contextText, GENERATE_WEAKNESS_ANALYSIS_PROMPT);
+  
+  interface WeaknessResponse {
+    analysis?: string;
+    mnemonic?: string;
+    customQuestions?: {
+      question?: string;
+      options?: string[];
+      correctAnswer?: string;
+      explanation?: string;
+    }[];
+  }
+
+  const parsed = safeParseJSON<WeaknessResponse>(response);
+  
+  if (!parsed) {
+    throw new AIServiceError('无法解析 AI 弱点分析响应', 'PARSE_ERROR', false);
+  }
+
+  return {
+    analysis: parsed.analysis || 'AI未能生成深度解析。',
+    mnemonic: parsed.mnemonic || 'AI未能生成记忆口诀。',
+    customQuestions: (parsed.customQuestions || []).map((q, index): Question => ({
+      id: `custom-q-${Date.now()}-${index}`,
+      question: q.question || '',
+      options: q.options || [],
+      correctAnswer: q.correctAnswer || '',
+      explanation: q.explanation || '',
+    })),
   };
 }

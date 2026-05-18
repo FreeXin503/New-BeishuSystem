@@ -8,6 +8,7 @@ import { useContentStore } from '../stores/useContentStore';
 import { parseContent, parseContentByChapters } from '../services/ai/parser';
 import { AIServiceError } from '../services/ai/deepseek';
 import { AppLayout } from '../components/layout';
+import { useToast } from '../components/ui';
 import type { ParsedContent } from '../types';
 
 export default function ContentPage() {
@@ -19,6 +20,27 @@ export default function ContentPage() {
   const [error, setError] = useState('');
   const [parseMode, setParseMode] = useState<'full' | 'chapter'>('full');
   const [activeTab, setActiveTab] = useState<'text' | 'quiz' | 'fillblank'>('text');
+  const toast = useToast();
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setText(event.target?.result as string);
+        if (!title) {
+          setTitle(file.name.replace(/\.[^/.]+$/, ""));
+        }
+        toast.success(`成功导入文件：${file.name}`);
+      };
+      reader.readAsText(file);
+    } else {
+      toast.error('目前仅支持 .txt 和 .md 格式的纯文本文件');
+    }
+    e.target.value = '';
+  };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -148,13 +170,34 @@ export default function ContentPage() {
 
           {/* 内容输入 */}
           <div>
-            <label
-              htmlFor="content"
-              className="block text-sm font-medium"
-              style={{ color: 'var(--color-text)' }}
-            >
-              政治文本内容
-            </label>
+            <div className="flex justify-between items-center mb-1">
+              <label
+                htmlFor="content"
+                className="block text-sm font-medium"
+                style={{ color: 'var(--color-text)' }}
+              >
+                政治文本内容
+              </label>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept=".txt,.md"
+                  onChange={handleFileUpload}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  title="导入本地文件"
+                />
+                <button
+                  type="button"
+                  className="text-xs font-medium px-3 py-1 rounded flex items-center gap-1 transition-colors"
+                  style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-primary)', border: '1px solid var(--color-primary)' }}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                  </svg>
+                  从文件导入 (.txt / .md)
+                </button>
+              </div>
+            </div>
             <textarea
               id="content"
               rows={15}

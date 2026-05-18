@@ -13,6 +13,7 @@ import Matching from '../components/learning/Matching';
 import Mnemonic from '../components/learning/Mnemonic';
 import SpeechReader from '../components/learning/SpeechReader';
 import LogicChainComponent from '../components/learning/LogicChain';
+import TutorMode from '../components/learning/TutorMode';
 import { generateFillBlanks } from '../services/learning/fillBlank';
 import { generateQuizQuestions } from '../services/learning/quiz';
 import { generateMatchingPairs } from '../services/learning/matching';
@@ -28,6 +29,7 @@ const LEARNING_MODES: { id: LearningMode; name: string; description: string; ico
   { id: 'logic-chain', name: '逻辑链', description: '理清逻辑关系，强化理解', icon: '🔀' },
   { id: 'mnemonic', name: '记忆口诀', description: 'AI 生成押韵助记', icon: '🎵' },
   { id: 'speech', name: '语音朗读', description: '听觉通道强化编码', icon: '🔊' },
+  { id: 'tutor', name: 'AI 伴读', description: '选中划词，随时向助教提问', icon: '🤖' },
 ];
 
 export default function LearningPage() {
@@ -308,6 +310,8 @@ export default function LearningPage() {
           );
         }
         return null;
+      case 'tutor':
+        return <TutorMode content={selectedContent} />;
       default:
         return null;
     }

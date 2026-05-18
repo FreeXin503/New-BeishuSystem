@@ -12,6 +12,7 @@ import {
 } from '../services/learning/favorite';
 import { getAllFavorites, getFavoritesByCategory, getAllQuizSessions } from '../services/storage/indexedDB';
 import { getOptionLabel } from '../services/learning/quiz';
+import { generateWeaknessAnalysis } from '../services/ai/parser';
 import { useToast } from '../components/ui';
 import { trackEvent } from '../services/statistics/eventTracker';
 
@@ -34,6 +35,9 @@ export default function FavoritesPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [history, setHistory] = useState<QuizSessionResult[]>([]);
   const [selectedHistory, setSelectedHistory] = useState<QuizSessionResult | null>(null);
+
+  const [generatingAnalysis, setGeneratingAnalysis] = useState(false);
+  const [weaknessAnalysis, setWeaknessAnalysis] = useState<{ analysis: string; mnemonic: string; customQuestions: Question[] } | null>(null);
 
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState<FavoriteCategory | null>(null);
@@ -251,6 +255,22 @@ export default function FavoritesPage() {
     if (categoryId === 'default') return '默认分类';
     const category = categories.find((item) => item.id === categoryId);
     return category?.name || categoryId;
+  }
+
+  async function handleGenerateAnalysis() {
+    if (!selectedHistory || selectedHistory.wrongItems.length === 0) return;
+    setGeneratingAnalysis(true);
+    try {
+      const result = await generateWeaknessAnalysis(selectedHistory.wrongItems);
+      setWeaknessAnalysis(result);
+      trackEvent('generate_weakness_analysis_success', { count: selectedHistory.wrongItems.length });
+    } catch (error) {
+      console.error('生成弱点解析失败:', error);
+      toast.error('生成失败，请检查网络或 API Key');
+      trackEvent('generate_weakness_analysis_fail', { reason: 'exception' });
+    } finally {
+      setGeneratingAnalysis(false);
+    }
   }
 
   if (loading) {
@@ -739,7 +759,7 @@ export default function FavoritesPage() {
                   key={session.id}
                   className="p-4 rounded-lg cursor-pointer transition-all hover:shadow-md"
                   style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}
-                  onClick={() => setSelectedHistory(session)}
+                  onClick={() => { setSelectedHistory(session); setWeaknessAnalysis(null); }}
                 >
                   <div className="flex justify-between items-center">
                     <div>
@@ -835,6 +855,83 @@ export default function FavoritesPage() {
                         )}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* AI 弱点攻坚 */}
+                {selectedHistory.wrongItems.length > 0 && (
+                  <div className="mt-8 border-t pt-6" style={{ borderColor: 'var(--color-border)' }}>
+                    <div className="flex justify-between items-center mb-4">
+                      <h4 className="text-lg font-bold flex items-center gap-2" style={{ color: 'var(--color-text)' }}>
+                        <span className="text-xl">🤖</span> AI 智能弱点攻坚
+                      </h4>
+                      {!weaknessAnalysis && (
+                        <button
+                          onClick={handleGenerateAnalysis}
+                          disabled={generatingAnalysis}
+                          className="px-4 py-2 rounded-lg text-white font-medium flex items-center gap-2 disabled:opacity-50 transition-all hover:-translate-y-0.5 active:scale-95"
+                          style={{ backgroundColor: 'var(--color-primary)' }}
+                        >
+                          {generatingAnalysis ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              正在深度解析...
+                            </>
+                          ) : (
+                            '生成专属弱点解析与口诀'
+                          )}
+                        </button>
+                      )}
+                    </div>
+
+                    {weaknessAnalysis && (
+                      <div className="space-y-6 animate-fade-in">
+                        {/* 深度解析 */}
+                        <div className="p-5 rounded-xl border shadow-sm" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
+                          <h5 className="font-bold mb-3 flex items-center gap-2 text-blue-600">
+                            <span>🔍</span> 易混淆概念深度辨析
+                          </h5>
+                          <div className="text-sm leading-relaxed space-y-2" style={{ color: 'var(--color-text)' }}>
+                            {weaknessAnalysis.analysis.split('\\n').map((line, i) => (
+                              <p key={i} className="min-h-[1em]">{line}</p>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* 记忆口诀 */}
+                        <div className="p-5 rounded-xl border shadow-sm" style={{ backgroundColor: 'rgba(16, 185, 129, 0.05)', borderColor: 'rgba(16, 185, 129, 0.2)' }}>
+                          <h5 className="font-bold mb-3 flex items-center gap-2 text-emerald-600">
+                            <span>🎵</span> 专属记忆口诀
+                          </h5>
+                          <div className="text-sm leading-relaxed italic font-medium space-y-2" style={{ color: 'var(--color-text)' }}>
+                             {weaknessAnalysis.mnemonic.split('\\n').map((line, i) => (
+                              <p key={i} className="min-h-[1em]">{line}</p>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* 专项定制题目 */}
+                        {weaknessAnalysis.customQuestions.length > 0 && (
+                          <div className="p-5 rounded-xl border shadow-sm" style={{ backgroundColor: 'rgba(245, 158, 11, 0.05)', borderColor: 'rgba(245, 158, 11, 0.2)' }}>
+                            <h5 className="font-bold mb-3 flex items-center gap-2 text-amber-600">
+                              <span>🎯</span> 进阶巩固练习 ({weaknessAnalysis.customQuestions.length}题)
+                            </h5>
+                            <button
+                              onClick={() => {
+                                sessionStorage.setItem('importedQuiz', JSON.stringify(weaknessAnalysis.customQuestions));
+                                sessionStorage.setItem('currentArchiveId', 'temp');
+                                sessionStorage.setItem('currentCategory', '弱点攻坚练习');
+                                navigate('/quiz-practice');
+                              }}
+                              className="w-full py-3 rounded-lg text-white font-bold shadow transition-all hover:opacity-90 active:scale-95"
+                              style={{ backgroundColor: '#f59e0b' }}
+                            >
+                              立刻挑战 AI 定制题目
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

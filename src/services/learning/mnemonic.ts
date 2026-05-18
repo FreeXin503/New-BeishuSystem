@@ -9,10 +9,13 @@ import {
   GENERATE_MNEMONIC_ACRONYM_PROMPT,
   GENERATE_MNEMONIC_STORY_PROMPT,
   GENERATE_MNEMONIC_COMPARE_PROMPT,
+  GENERATE_MNEMONIC_ANIME_PROMPT,
+  GENERATE_MNEMONIC_ACADEMIC_PROMPT,
+  GENERATE_MNEMONIC_GRANDMA_PROMPT,
 } from '../ai/deepseek';
 
 // 口诀类型
-export type MnemonicType = 'default' | 'rhyme' | 'acronym' | 'story' | 'compare';
+export type MnemonicType = 'default' | 'rhyme' | 'acronym' | 'story' | 'compare' | 'anime' | 'academic' | 'grandma';
 
 export interface MnemonicTypeInfo {
   id: MnemonicType;
@@ -24,6 +27,9 @@ export interface MnemonicTypeInfo {
 export const MNEMONIC_TYPES: MnemonicTypeInfo[] = [
   { id: 'default', name: '智能口诀', description: 'AI 自动选择最佳记忆方式', icon: '🧠' },
   { id: 'rhyme', name: '押韵口诀', description: '朗朗上口的押韵句式', icon: '🎵' },
+  { id: 'anime', name: '热血动漫', description: '中二燃向，充满激情', icon: '🔥' },
+  { id: 'grandma', name: '大妈顺口溜', description: '接地气，通俗洗脑', icon: '👵' },
+  { id: 'academic', name: '严谨学术', description: '底层逻辑，结构推演', icon: '🎓' },
   { id: 'acronym', name: '首字缩略', description: '首字母组成易记词语', icon: '🔤' },
   { id: 'story', name: '故事联想', description: '用故事串联知识点', icon: '📖' },
   { id: 'compare', name: '对比记忆', description: '表格对比异同点', icon: '⚖️' },
@@ -51,6 +57,12 @@ function getPromptByType(type: MnemonicType): string {
       return GENERATE_MNEMONIC_STORY_PROMPT;
     case 'compare':
       return GENERATE_MNEMONIC_COMPARE_PROMPT;
+    case 'anime':
+      return GENERATE_MNEMONIC_ANIME_PROMPT;
+    case 'academic':
+      return GENERATE_MNEMONIC_ACADEMIC_PROMPT;
+    case 'grandma':
+      return GENERATE_MNEMONIC_GRANDMA_PROMPT;
     default:
       return GENERATE_MNEMONIC_PROMPT;
   }
