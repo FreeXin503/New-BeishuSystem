@@ -1,5 +1,5 @@
 /**
- * 内容输入页面
+ * 语料资产中心
  */
 
 import { useState } from 'react';
@@ -13,33 +13,61 @@ import type { ParsedContent } from '../types';
 
 export default function ContentPage() {
   const navigate = useNavigate();
-  const { addContent } = useContentStore();
+  const { contents, addContent, studySessions } = useContentStore();
   const [text, setText] = useState('');
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [parseMode, setParseMode] = useState<'full' | 'chapter'>('full');
   const [activeTab, setActiveTab] = useState<'text' | 'quiz' | 'fillblank'>('text');
+  const [dragActive, setDragActive] = useState(false);
+  const [showImportForm, setShowImportForm] = useState(false);
   const toast = useToast();
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  // Helper to handle text files (.txt, .md)
+  const processFile = (file: File) => {
     if (file.name.endsWith('.txt') || file.name.endsWith('.md')) {
       const reader = new FileReader();
       reader.onload = (event) => {
-        setText(event.target?.result as string);
+        const fileContent = event.target?.result as string;
+        setText(fileContent);
         if (!title) {
           setTitle(file.name.replace(/\.[^/.]+$/, ""));
         }
-        toast.success(`成功导入文件：${file.name}`);
+        toast.success(`成功读取文件：${file.name}`);
+        setShowImportForm(true); // Open import form when file loaded
       };
       reader.readAsText(file);
     } else {
       toast.error('目前仅支持 .txt 和 .md 格式的纯文本文件');
     }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processFile(file);
+    }
     e.target.value = '';
+  };
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      processFile(e.dataTransfer.files[0]);
+    }
   };
 
   async function handleSubmit(e: React.FormEvent) {
@@ -73,6 +101,11 @@ export default function ContentPage() {
       const { saveContent } = await import('../services/storage/indexedDB');
       await saveContent(content);
 
+      toast.success('语料导入并成功解析！');
+      setShowImportForm(false);
+      setText('');
+      setTitle('');
+      
       navigate(`/learning/${content.id}`);
     } catch (err) {
       if (err instanceof AIServiceError && !err.retryable) {
@@ -85,308 +118,332 @@ export default function ContentPage() {
     }
   }
 
+  // Calculate stats for a given content id
+  const getContentStats = (content: ParsedContent) => {
+    const matchedSessions = studySessions?.filter(s => s.contentId === content.id) || [];
+    const entityCount = content.keywords?.length || 0;
+    const practiceCount = matchedSessions.length;
+    return `${entityCount} 组实体 / ${practiceCount} 次打卡`;
+  };
+
   return (
-    <AppLayout title="添加学习内容" showBack onBack={() => navigate('/')}>
-      <div className="max-w-3xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
-        {/* 功能选择标签页 */}
-        <div className="mb-8">
-          <div className="border-b border-gray-200 dark:border-gray-700">
-            <nav className="-mb-px flex space-x-8">
-              <button
-                onClick={() => setActiveTab('text')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
-                  activeTab === 'text'
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-                }`}
-              >
-                <div className="flex items-center">
-                  <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                  </svg>
-                  文本内容
+    <AppLayout title="语料资产中心" showBack onBack={() => navigate('/')}>
+      <div className="page-fade-in p-8 md:p-12 max-w-6xl mx-auto space-y-10">
+        
+        {/* Flat high-fidelity Header */}
+        <header className="flex flex-col md:flex-row md:items-end justify-between border-b border-slate-200/60 pb-8 gap-4">
+          <div>
+            <h2 className="text-4xl font-bold tracking-tight text-slate-900">语料资产中心</h2>
+            <p className="text-slate-500 mt-2 text-sm">全格式资源处理、自适应长文本划词与防腐转换</p>
+          </div>
+          <button
+            onClick={() => setShowImportForm(!showImportForm)}
+            className="bg-brand-primary px-6 py-3 rounded-2xl text-white font-bold text-sm shadow-xl shadow-indigo-600/20 hover:bg-indigo-700 active:scale-[0.98] transition-all duration-300"
+          >
+            {showImportForm ? '收起导入面板' : '导入语料 / Quiz'}
+          </button>
+        </header>
+
+        {/* Dynamic Import Sandbox Drawer / Form */}
+        {showImportForm && (
+          <div className="bg-white rounded-master p-8 border border-workspace-border shadow-panel-flat space-y-8 page-fade-in">
+            {/* Functional Pill Tabs */}
+            <div className="flex border-b border-slate-200/60 pb-3">
+              <nav className="flex space-x-6">
+                {[
+                  { id: 'text', label: '📖 文本内容', desc: '导入政治文本，由 AI 自动解析' },
+                  { id: 'quiz', label: '🎯 选择题', desc: '批量导入客观选择题' },
+                  { id: 'fillblank', label: '✏️ 填空题', desc: '导入或管理段落挖空' }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id as any)}
+                    className={`pb-3 text-sm font-bold border-b-2 transition-all duration-300 ${
+                      activeTab === tab.id
+                        ? 'border-brand-primary text-brand-primary'
+                        : 'border-transparent text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+
+            {/* TAB: Text Area with Drag & Drop */}
+            {activeTab === 'text' && (
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* File Upload Area */}
+                  <div
+                    onDragEnter={handleDrag}
+                    onDragOver={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDrop={handleDrop}
+                    className={`border-2 border-dashed rounded-master p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-300 relative min-h-[220px] ${
+                      dragActive
+                        ? 'border-brand-primary bg-indigo-50/20'
+                        : 'border-slate-200 bg-slate-50/30 hover:border-brand-primary hover:bg-slate-50/50'
+                    }`}
+                  >
+                    <input
+                      type="file"
+                      accept=".txt,.md"
+                      onChange={handleFileUpload}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      title="拖拽或点击上传本地文件"
+                    />
+                    <div className="text-4xl mb-3">📤</div>
+                    <h4 className="text-sm font-bold text-slate-700">拖拽文本或 Markdown 文件至此</h4>
+                    <p className="text-xs text-slate-400 mt-2">支持 .txt 和 .md 纯文本文件</p>
+                    <button
+                      type="button"
+                      className="mt-4 px-4 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-brand-primary shadow-sm hover:border-brand-primary hover:bg-indigo-50/10 transition-all"
+                    >
+                      浏览本地文件
+                    </button>
+                  </div>
+
+                  {/* Title and Settings Panel */}
+                  <div className="space-y-4 flex flex-col justify-between">
+                    <div>
+                      <label htmlFor="title" className="block text-xs font-black text-slate-400 uppercase tracking-wider mb-2">
+                        语料标题 (可选)
+                      </label>
+                      <input
+                        type="text"
+                        id="title"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="输入内容标题，留空则由 AI 自动推断"
+                        className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-semibold focus:outline-none focus:border-brand-primary focus:ring-1 focus:ring-brand-primary/25 bg-slate-50/50 focus:bg-white transition-all duration-200"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-black text-slate-400 uppercase tracking-wider mb-3">
+                        AI 解析模式
+                      </label>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div
+                          onClick={() => setParseMode('full')}
+                          className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-300 text-left ${
+                            parseMode === 'full'
+                              ? 'border-brand-primary bg-indigo-50/15'
+                              : 'border-slate-100 bg-slate-50/30 hover:border-slate-200'
+                          }`}
+                        >
+                          <h5 className="font-bold text-xs text-slate-800">整体分析</h5>
+                          <p className="text-[10px] text-slate-400 mt-1">提取全局结构，适合较短的独立段落或演讲</p>
+                        </div>
+                        <div
+                          onClick={() => setParseMode('chapter')}
+                          className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-300 text-left ${
+                            parseMode === 'chapter'
+                              ? 'border-brand-primary bg-indigo-50/15'
+                              : 'border-slate-100 bg-slate-50/30 hover:border-slate-200'
+                          }`}
+                        >
+                          <h5 className="font-bold text-xs text-slate-800">按章节分析</h5>
+                          <p className="text-[10px] text-slate-400 mt-1">自动拆分多层级章节，提取颗粒度更细的背诵链</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </button>
-              <button
-                onClick={() => setActiveTab('quiz')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
-                  activeTab === 'quiz'
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-                }`}
-              >
-                <div className="flex items-center">
-                  <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2v2a2 2 0 002 2h-2" />
-                  </svg>
-                  选择题
+
+                {/* Raw Text Input */}
+                <div className="space-y-2">
+                  <label htmlFor="content" className="block text-xs font-black text-slate-400 uppercase tracking-wider">
+                    政治文本内容输入
+                  </label>
+                  <textarea
+                    id="content"
+                    rows={8}
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    placeholder="在此直接粘贴或输入政治学习内容、大纲、法条等，AI 将自动分析句法语义并生成学习背诵实体..."
+                    className="w-full p-4 rounded-xl border border-slate-200 text-sm leading-relaxed focus:outline-none focus:border-brand-primary focus:ring-1 focus:ring-brand-primary/25 bg-slate-50/30 focus:bg-white transition-all"
+                  />
                 </div>
-              </button>
-              <button
-                onClick={() => setActiveTab('fillblank')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
-                  activeTab === 'fillblank'
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-                }`}
-              >
-                <div className="flex items-center">
-                  <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-4a1 1 0 011-1v-2a1 1 0 00-1-1zM7 19a2 2 0 002 2v-2a1 1 0 011-1v-2a1 1 0 00-1-1v-4a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 001 1v2a1 1 0 001 1v2a2 2 0 002-2z" />
-                  </svg>
-                  填空题
+
+                {/* Error Panel */}
+                {error && (
+                  <div className="p-4 rounded-2xl bg-feedback-errorLight border border-feedback-error/20 flex gap-3 text-feedback-error text-xs font-semibold">
+                    <span>⚠️</span>
+                    <p>{error}</p>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="flex justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setText('');
+                      setTitle('');
+                      setShowImportForm(false);
+                    }}
+                    className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-500 font-bold text-xs hover:bg-slate-50 hover:text-slate-700 transition-colors"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="bg-brand-primary px-6 py-2.5 rounded-xl text-white font-bold text-xs shadow-lg shadow-indigo-600/10 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 active:scale-95 transition-all"
+                  >
+                    {loading ? (
+                      <>
+                        <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        AI 正在执行格式清洗与划词解析...
+                      </>
+                    ) : (
+                      <>
+                        <span>⚡</span>
+                        启动 AI 深度解析
+                      </>
+                    )}
+                  </button>
                 </div>
-              </button>
-            </nav>
+              </form>
+            )}
+
+            {/* TAB: Quiz Area */}
+            {activeTab === 'quiz' && (
+              <div className="text-center py-8 space-y-6">
+                <div className="h-16 w-16 rounded-full bg-teal-50 text-teal-600 flex items-center justify-center text-3xl mx-auto shadow-sm">
+                  🎯
+                </div>
+                <div className="max-w-md mx-auto space-y-2">
+                  <h3 className="text-lg font-bold text-slate-800">导入客观选择题</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    系统内置强健的选择题解析契约。支持自动匹配标准答案、纠错反馈，生成精美的离线自测卡包。
+                  </p>
+                </div>
+                <button
+                  onClick={() => navigate('/quiz-import')}
+                  className="px-6 py-3 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-600 text-white font-bold text-sm shadow-md hover:from-teal-600 hover:to-emerald-700 active:scale-95 transition-all"
+                >
+                  前往选择题导入面板 →
+                </button>
+              </div>
+            )}
+
+            {/* TAB: Fillblank Area */}
+            {activeTab === 'fillblank' && (
+              <div className="text-center py-8 space-y-6">
+                <div className="h-16 w-16 rounded-full bg-indigo-50 text-brand-primary flex items-center justify-center text-3xl mx-auto shadow-sm">
+                  ✏️
+                </div>
+                <div className="max-w-md mx-auto space-y-2">
+                  <h3 className="text-lg font-bold text-slate-800">管理填空题</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    提供多维度挖空（行内 Popover 候选与逐字盲打输入）设置。帮助从段落框架到政治实体细节的全面精细记忆。
+                  </p>
+                </div>
+                <button
+                  onClick={() => navigate('/fill-blank-import')}
+                  className="px-6 py-3 rounded-2xl bg-gradient-to-r from-indigo-500 to-indigo-600 text-white font-bold text-sm shadow-md hover:from-indigo-600 hover:to-indigo-700 active:scale-95 transition-all"
+                >
+                  前往填空题管理中心 →
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Existing Assets Grid */}
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">
+              存量语料资源列表 ({contents.length})
+            </h3>
+            <span className="text-[10px] font-bold text-slate-400">已对齐 IndexedDB 脱敏数据层</span>
+          </div>
+
+          {contents.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {contents.map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-white rounded-master p-8 border border-workspace-border shadow-panel-flat hover:shadow-md hover:border-indigo-200 transition-all duration-300 group flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex justify-between items-start mb-6">
+                      <span className="px-3 py-1 bg-indigo-50 text-brand-primary text-[10px] font-black rounded-lg uppercase tracking-wider">
+                        {item.chapters?.length > 1 ? 'Multi-Chapter' : 'Single Text'} 语料
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        导入时间: {new Date(item.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <h4 className="text-xl font-bold text-slate-900 mb-3 group-hover:text-brand-primary transition-colors">
+                      {item.title}
+                    </h4>
+                    <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">
+                      包含 {item.chapters?.length || 0} 个章节结构，{item.concepts?.length || 0} 组核心学术概念及 {item.keywords?.length || 0} 个背诵实体。
+                    </p>
+                  </div>
+
+                  <div className="mt-8 pt-6 border-t border-slate-50 flex items-center justify-between">
+                    <span className="text-xs font-black text-slate-500">
+                      {getContentStats(item)}
+                    </span>
+                    <button
+                      onClick={() => navigate(`/learning/${item.id}`)}
+                      className="text-brand-primary font-black text-sm flex items-center gap-1 group-hover:translate-x-1 transition-all duration-300"
+                    >
+                      启动演练
+                      <span>→</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="border border-slate-100 rounded-master p-16 text-center bg-slate-50/50 space-y-4">
+              <div className="text-5xl">📦</div>
+              <h4 className="font-bold text-slate-700">暂无任何导入语料</h4>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                点击上方“导入语料 / Quiz”按钮，粘贴一段政治文本或上传文件，让 AI 为您自动转化并构建高水准的背诵资源。
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Detailed User Guide Panel */}
+        <div className="rounded-master p-8 border border-workspace-border bg-white shadow-panel-flat space-y-6">
+          <h3 className="text-lg font-bold text-slate-800">
+            💡 智能语料转换引擎说明书
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-brand-primary uppercase">1. 实体降解与防腐清洗</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                所有导入的文本均由防腐转换工厂 (Transformer) 执行多层过滤，消除外部标签和杂乱标记，保证 IndexedDB 储存的数据实体完全纯净。
+              </p>
+            </div>
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-brand-primary uppercase">2. 记忆链自适应分割</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                对于长文本，AI 将依据树形章节节点分割语义单元。每个节点都会分配专有权重，以支撑多态模式 (选择、拼写、填空) 的柔性注入。
+              </p>
+            </div>
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-brand-primary uppercase">3. 海马体时钟对齐</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                每次打卡与复习都会记录入离线预写发件箱日志 (WAOL)，并由底层 SM-2 算法精算其遗忘向量，自动生成后续最优的间隔复习周期。
+              </p>
+            </div>
           </div>
         </div>
 
-        {/* 文本内容区域 */}
-        {activeTab === 'text' && (
-          <form onSubmit={handleSubmit} className="space-y-6">
-          {/* 标题输入 */}
-          <div>
-            <label
-              htmlFor="title"
-              className="block text-sm font-medium"
-              style={{ color: 'var(--color-text)' }}
-            >
-              标题（可选）
-            </label>
-            <input
-              type="text"
-              id="title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="输入内容标题"
-              className="mt-1 block w-full rounded-md shadow-sm focus:ring-2 sm:text-sm p-3"
-              style={{ 
-                backgroundColor: 'var(--color-card)', 
-                color: 'var(--color-text)',
-                border: '1px solid var(--color-border)'
-              }}
-            />
-          </div>
-
-          {/* 内容输入 */}
-          <div>
-            <div className="flex justify-between items-center mb-1">
-              <label
-                htmlFor="content"
-                className="block text-sm font-medium"
-                style={{ color: 'var(--color-text)' }}
-              >
-                政治文本内容
-              </label>
-              <div className="relative">
-                <input
-                  type="file"
-                  accept=".txt,.md"
-                  onChange={handleFileUpload}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  title="导入本地文件"
-                />
-                <button
-                  type="button"
-                  className="text-xs font-medium px-3 py-1 rounded flex items-center gap-1 transition-colors"
-                  style={{ backgroundColor: 'var(--color-bg)', color: 'var(--color-primary)', border: '1px solid var(--color-primary)' }}
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                  </svg>
-                  从文件导入 (.txt / .md)
-                </button>
-              </div>
-            </div>
-            <textarea
-              id="content"
-              rows={15}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="粘贴或输入政治学习内容，AI 将自动解析并生成学习材料..."
-              className="mt-1 block w-full rounded-md shadow-sm focus:ring-2 sm:text-sm p-3"
-              style={{ 
-                backgroundColor: 'var(--color-card)', 
-                color: 'var(--color-text)',
-                border: '1px solid var(--color-border)'
-              }}
-            />
-            <p className="mt-2 text-sm" style={{ color: 'var(--color-secondary)' }}>
-              支持输入教材内容、考试大纲、知识点总结等政治学习材料
-            </p>
-          </div>
-
-          {/* 解析模式选择 */}
-          <div>
-            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--color-text)' }}>
-              解析模式
-            </label>
-            <div className="flex gap-4">
-              <label className="flex items-center cursor-pointer">
-                <input
-                  type="radio"
-                  name="parseMode"
-                  value="full"
-                  checked={parseMode === 'full'}
-                  onChange={() => setParseMode('full')}
-                  className="mr-2"
-                />
-                <span style={{ color: 'var(--color-text)' }}>整体分析</span>
-                <span className="ml-1 text-xs" style={{ color: 'var(--color-secondary)' }}>
-                  （适合短文本）
-                </span>
-              </label>
-              <label className="flex items-center cursor-pointer">
-                <input
-                  type="radio"
-                  name="parseMode"
-                  value="chapter"
-                  checked={parseMode === 'chapter'}
-                  onChange={() => setParseMode('chapter')}
-                  className="mr-2"
-                />
-                <span style={{ color: 'var(--color-text)' }}>按章节分析</span>
-                <span className="ml-1 text-xs" style={{ color: 'var(--color-secondary)' }}>
-                  （适合长文本，更精细）
-                </span>
-              </label>
-            </div>
-          </div>
-
-          {/* 错误提示 */}
-          {error && (
-            <div className="rounded-md p-4" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-error)' }}>
-              <div className="flex">
-                <svg className="h-5 w-5" style={{ color: 'var(--color-error)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <div className="ml-3">
-                  <p className="text-sm" style={{ color: 'var(--color-error)' }}>{error}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 提交按钮 */}
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={loading}
-              className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md shadow-sm text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ backgroundColor: 'var(--color-primary)' }}
-            >
-              {loading ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  AI 解析中...
-                </>
-              ) : (
-                <>
-                  <svg className="-ml-1 mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  开始解析
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-        )}
-
-        {/* 选择题区域 */}
-        {activeTab === 'quiz' && (
-          <div className="space-y-6">
-            <div className="text-center py-12">
-              <div className="bg-gradient-to-r from-teal-50 to-cyan-50 rounded-full w-24 h-24 mx-auto mb-6 flex items-center justify-center">
-                <svg className="w-12 h-12 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2v2a2 2 0 002 2h-2" />
-                </svg>
-              </div>
-              <h3 className="text-xl font-bold text-gray-800 mb-4">
-                导入选择题
-              </h3>
-              <p className="text-gray-600 mb-8 max-w-md mx-auto">
-                粘贴选择题文本，系统将自动解析题目和选项，生成可练习的选择题库
-              </p>
-              <button
-                onClick={() => navigate('/quiz-import')}
-                className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-medium rounded-xl hover:from-teal-600 hover:to-cyan-700 transform hover:scale-105 transition-all duration-200 shadow-lg"
-              >
-                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                开始导入选择题
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 填空题区域 */}
-        {activeTab === 'fillblank' && (
-          <div className="space-y-6">
-            <div className="text-center py-12">
-              <div className="bg-gradient-to-r from-indigo-50 to-blue-50 rounded-full w-24 h-24 mx-auto mb-6 flex items-center justify-center">
-                <svg className="w-12 h-12 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-4a1 1 0 011-1v-2a1 1 0 00-1-1zM7 19a2 2 0 002 2v-2a1 1 0 011-1v-2a1 1 0 00-1-1v-4a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 001 1v2a1 1 0 001 1v2a2 2 0 002-2z" />
-                </svg>
-              </div>
-              <h3 className="text-xl font-bold text-gray-800 mb-4">
-                填空题管理
-              </h3>
-              <p className="text-gray-600 mb-8 max-w-md mx-auto">
-                手动添加或批量导入填空题，进行专项练习，提高记忆效果
-              </p>
-              <button
-                onClick={() => navigate('/fill-blank-import')}
-                className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-indigo-500 to-blue-600 text-white font-medium rounded-xl hover:from-indigo-600 hover:to-blue-700 transform hover:scale-105 transition-all duration-200 shadow-lg"
-              >
-                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                管理填空题
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 使用说明 - 只在文本内容标签页显示 */}
-        {activeTab === 'text' && (
-          <div className="mt-8 rounded-lg p-6" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}>
-            <h3 className="text-lg font-medium mb-4" style={{ color: 'var(--color-text)' }}>
-              使用说明
-            </h3>
-            <ul className="space-y-2 text-sm" style={{ color: 'var(--color-secondary)' }}>
-              <li className="flex items-start">
-                <svg className="h-5 w-5 mr-2 flex-shrink-0" style={{ color: 'var(--color-success)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                AI 会自动识别章节结构，提取关键词和概念
-              </li>
-              <li className="flex items-start">
-                <svg className="h-5 w-5 mr-2 flex-shrink-0" style={{ color: 'var(--color-success)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                自动生成挖空填词、选择题、术语配对等学习材料
-              </li>
-              <li className="flex items-start">
-                <svg className="h-5 w-5 mr-2 flex-shrink-0" style={{ color: 'var(--color-success)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                支持生成记忆口诀，帮助快速记忆
-              </li>
-              <li className="flex items-start">
-                <svg className="h-5 w-5 mr-2 flex-shrink-0" style={{ color: 'var(--color-success)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                基于 SM-2 算法智能安排复习计划
-              </li>
-            </ul>
-          </div>
-        )}
       </div>
     </AppLayout>
   );
 }
+

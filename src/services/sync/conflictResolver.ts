@@ -6,7 +6,7 @@
 import type { ParsedContent, ReviewCard, StudySession } from '../../types';
 
 // 冲突解决策略
-export type ConflictStrategy = 'local-wins' | 'remote-wins' | 'latest-wins' | 'merge';
+export type ConflictStrategy = 'local-wins' | 'remote-wins' | 'latest-wins' | 'lww' | 'merge';
 
 // 冲突项
 export interface ConflictItem<T> {
@@ -22,21 +22,30 @@ export interface ResolvedItem<T> {
 }
 
 /**
- * 获取时间戳
+ * 获取时间戳 (大厂标准 LWW 属性审计支持)
  */
-function getTimestamp(item: ParsedContent | ReviewCard | StudySession): number {
-  if ('updatedAt' in item) {
-    return new Date(item.updatedAt).getTime();
+function getTimestamp(item: any): number {
+  if (!item) return 0;
+  
+  // 按照优先级顺序审计时间戳属性，支持各种实体类型
+  const timestampFields = [
+    'updatedAt',
+    'lastPracticedAt',
+    'lastReviewDate',
+    'endedAt',
+    'createdAt',
+    'timestamp'
+  ];
+  
+  for (const field of timestampFields) {
+    if (field in item && item[field]) {
+      const parsed = new Date(item[field]).getTime();
+      if (!isNaN(parsed)) {
+        return parsed;
+      }
+    }
   }
-  if ('lastReviewDate' in item && item.lastReviewDate) {
-    return new Date(item.lastReviewDate).getTime();
-  }
-  if ('endedAt' in item && item.endedAt) {
-    return new Date(item.endedAt).getTime();
-  }
-  if ('createdAt' in item) {
-    return new Date(item.createdAt).getTime();
-  }
+  
   return 0;
 }
 
@@ -55,6 +64,7 @@ export function resolveContentConflict(
     case 'remote-wins':
       return { resolved: remote, source: 'remote' };
     
+    case 'lww':
     case 'latest-wins': {
       const localTime = getTimestamp(local);
       const remoteTime = getTimestamp(remote);
@@ -125,6 +135,7 @@ export function resolveCardConflict(
     case 'remote-wins':
       return { resolved: remote, source: 'remote' };
     
+    case 'lww':
     case 'latest-wins': {
       const localTime = getTimestamp(local);
       const remoteTime = getTimestamp(remote);
@@ -166,6 +177,7 @@ export function resolveSessionConflict(
     case 'remote-wins':
       return { resolved: remote, source: 'remote' };
     
+    case 'lww':
     case 'latest-wins': {
       const localTime = getTimestamp(local);
       const remoteTime = getTimestamp(remote);

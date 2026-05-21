@@ -2,10 +2,10 @@
  * IndexedDB 存储服务
  */
 
-import type { ParsedContent, ReviewCard, StudySession, UserSettings, SyncItem, ScoreRecord, LogicChain, QuizArchive, WrongAnswer, FillBlankItem, FillBlankSessionResult, FillBlankFavorite, FillBlankWrongAnswer, FavoriteQuestion, FavoriteCategory, FillBlankImportRecord, QuizSessionResult } from '../../types';
+import type { ParsedContent, ReviewCard, StudySession, UserSettings, SyncItem, ScoreRecord, LogicChain, QuizArchive, WrongAnswer, FillBlankItem, FillBlankSessionResult, FillBlankFavorite, FillBlankWrongAnswer, FavoriteQuestion, FavoriteCategory, FillBlankImportRecord, QuizSessionResult, OutboxTransaction } from '../../types';
 
 const DB_NAME = 'politics-study-db';
-const DB_VERSION = 9;
+const DB_VERSION = 10;
 
 // Store 名称
 const STORES = {
@@ -27,6 +27,7 @@ const STORES = {
   FILL_BLANK_WRONG_ANSWERS: 'fillBlankWrongAnswers',
   FILL_BLANK_IMPORT_RECORDS: 'fillBlankImportRecords',
   QUIZ_SESSIONS: 'quizSessions',
+  OUTBOX_TRANSACTIONS: 'outbox_transactions',
 } as const;
 
 let db: IDBDatabase | null = null;
@@ -171,6 +172,11 @@ export async function openDatabase(): Promise<IDBDatabase> {
         const sessionStore = database.createObjectStore(STORES.QUIZ_SESSIONS, { keyPath: 'id' });
         sessionStore.createIndex('archiveId', 'archiveId', { unique: false });
         sessionStore.createIndex('completedAt', 'completedAt', { unique: false });
+      }
+      // 新增：企业级事务预写发件箱日志存储
+      if (!database.objectStoreNames.contains(STORES.OUTBOX_TRANSACTIONS)) {
+        const outboxStore = database.createObjectStore(STORES.OUTBOX_TRANSACTIONS, { keyPath: 'id' });
+        outboxStore.createIndex('isSynced', 'isSynced', { unique: false });
       }
     };
   });
@@ -791,3 +797,46 @@ export async function getQuizSession(id: string): Promise<QuizSessionResult | nu
     request.onerror = () => reject(request.error);
   });
 }
+
+// ==================== Outbox Transactions CRUD ====================
+
+export async function saveOutboxTransaction(tx: OutboxTransaction): Promise<void> {
+  return put(STORES.OUTBOX_TRANSACTIONS, tx);
+}
+
+export async function getAllOutboxTransactions(): Promise<OutboxTransaction[]> {
+  return getAll<OutboxTransaction>(STORES.OUTBOX_TRANSACTIONS);
+}
+
+export async function getUnsyncedOutboxTransactions(): Promise<OutboxTransaction[]> {
+  const store = await getStore(STORES.OUTBOX_TRANSACTIONS);
+  const index = store.index('isSynced');
+  return new Promise((resolve, reject) => {
+    // isSynced value of false is represented as 0 in IndexedDB integer representation,
+    // but since we stored raw boolean false, we can use IDBKeyRange.only(false).
+    const request = index.getAll(IDBKeyRange.only(false));
+    request.onsuccess = () => {
+      const results = (request.result as OutboxTransaction[]) || [];
+      // Sort by timestamp ascending to ensure FIFO ordering
+      resolve(results.sort((a, b) => a.timestamp - b.timestamp));
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function markTransactionSynced(id: string): Promise<void> {
+  const tx = await getById<OutboxTransaction>(STORES.OUTBOX_TRANSACTIONS, id);
+  if (tx) {
+    tx.isSynced = true;
+    await put(STORES.OUTBOX_TRANSACTIONS, tx);
+  }
+}
+
+export async function deleteOutboxTransaction(id: string): Promise<void> {
+  return deleteById(STORES.OUTBOX_TRANSACTIONS, id);
+}
+
+export async function clearOutbox(): Promise<void> {
+  return clear(STORES.OUTBOX_TRANSACTIONS);
+}
+

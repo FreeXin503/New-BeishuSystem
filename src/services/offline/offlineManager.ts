@@ -124,17 +124,19 @@ export async function triggerSync(): Promise<void> {
     return;
   }
   
-  // 获取当前用户（使用本地认证）
-  const { getCurrentUser } = await import('../auth/authService');
-  const user = await getCurrentUser();
-  
-  if (!user || user.isGuest) {
-    console.log('[Offline] 未登录或游客模式，跳过同步');
-    return;
+  let userId = 'default-user';
+  try {
+    const { getCurrentUser } = await import('../auth/authService');
+    const user = await getCurrentUser();
+    if (user && !user.isGuest) {
+      userId = user.id;
+    }
+  } catch (err) {
+    console.warn('[Offline] Failed to get user info, proceeding with sync:', err);
   }
   
   try {
-    await syncAll(user.id);
+    await syncAll(userId);
     notifySyncListeners();
   } catch (error) {
     console.error('[Offline] 同步失败:', error);

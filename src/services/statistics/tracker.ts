@@ -46,7 +46,9 @@ export function calculateStreakDays(sessions: StudySession[]): number {
   const dateSet = new Set<string>();
   sessions.forEach((session) => {
     const date = new Date(session.startedAt);
-    dateSet.add(date.toISOString().split('T')[0]);
+    if (!isNaN(date.getTime())) {
+      dateSet.add(date.toISOString().split('T')[0]);
+    }
   });
 
   const dates = Array.from(dateSet).sort().reverse();
@@ -173,7 +175,9 @@ export function getTodayStats(sessions: StudySession[]): {
 } {
   const today = new Date().toISOString().split('T')[0];
   const todaySessions = sessions.filter((s) => {
-    const sessionDate = new Date(s.startedAt).toISOString().split('T')[0];
+    const date = new Date(s.startedAt);
+    if (isNaN(date.getTime())) return false;
+    const sessionDate = date.toISOString().split('T')[0];
     return sessionDate === today;
   });
 
@@ -202,7 +206,9 @@ export function getWeeklyStats(sessions: StudySession[]): {
 
   // 填充数据
   sessions.forEach((session) => {
-    const dateStr = new Date(session.startedAt).toISOString().split('T')[0];
+    const date = new Date(session.startedAt);
+    if (isNaN(date.getTime())) return;
+    const dateStr = date.toISOString().split('T')[0];
     if (weekData.has(dateStr)) {
       const data = weekData.get(dateStr)!;
       data.studyTime += session.duration;

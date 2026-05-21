@@ -213,6 +213,15 @@ export interface SyncItem {
   timestamp: Date;
 }
 
+export interface OutboxTransaction {
+  id: string; // client-side UUID-v4
+  action: 'MARK_MASTERED' | 'SAVE_WRONG' | 'SAVE_PROGRESS' | 'DELETE_PROGRESS' | 'SAVE_FAVORITE' | 'DELETE_FAVORITE';
+  payload: any; // JSON-serializable parameters
+  timestamp: number; // millisecond timestamp
+  isSynced: boolean;
+}
+
+
 // 统计相关
 export interface Statistics {
   totalStudyTime: number;

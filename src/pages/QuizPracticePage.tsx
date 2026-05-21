@@ -5,11 +5,11 @@
 
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { Question, ModeProgress, FavoriteCategory } from '../types';
+import type { Question, ModeProgress } from '../types';
 import { getOptionLabel, getScoreRating } from '../services/learning/quiz';
 import { updatePracticeRecord, getArchive } from '../services/learning/quizArchive';
 import { addWrongAnswers } from '../services/learning/wrongAnswer';
-import { toggleFavorite, isFavorited, getFavoriteCategoryById, getFavoriteCategories, addFavorite } from '../services/learning/favorite';
+import { toggleFavorite, isFavorited, getFavoriteCategoryById, addFavorite } from '../services/learning/favorite';
 import FavoriteCategoryPicker from '../components/learning/FavoriteCategoryPicker';
 import { saveQuizSession } from '../services/storage/indexedDB';
 

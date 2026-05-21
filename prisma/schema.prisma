@@ -62,3 +62,11 @@ model SynomasterProgress {
 
   @@unique([mode])
 }
+
+// 已处理的客户端幂等事务表
+model ProcessedTransaction {
+  id        String   @id // 客户端 UUID
+  action    String
+  createdAt DateTime @default(now())
+}
+

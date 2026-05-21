@@ -1,562 +1,1034 @@
 /**
- * 学习页面 - 学习模式选择和学习界面
+ * 核心演练工作台 - LearningPage.tsx
+ * 像素级对齐原型 `id="page-learning"` 的终极全场景交互工作台
  */
 
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useUserStore } from '../stores/useUserStore';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useContentStore } from '../stores/useContentStore';
 import { AppLayout } from '../components/layout';
-import FillBlank from '../components/learning/FillBlank';
-import Quiz from '../components/learning/Quiz';
-import Matching from '../components/learning/Matching';
-import Mnemonic from '../components/learning/Mnemonic';
-import SpeechReader from '../components/learning/SpeechReader';
-import LogicChainComponent from '../components/learning/LogicChain';
-import TutorMode from '../components/learning/TutorMode';
-import { generateFillBlanks } from '../services/learning/fillBlank';
-import { generateQuizQuestions } from '../services/learning/quiz';
-import { generateMatchingPairs } from '../services/learning/matching';
-import { generateLogicChainFromContent } from '../services/learning/logicChain';
-import { saveStudySession, saveLogicChain, getLogicChainsByContent } from '../services/storage/indexedDB';
-import { AIServiceError } from '../services/ai/deepseek';
-import type { ParsedContent, LearningMode, ModeProgress, StudySession, LogicChain } from '../types';
+import { useToast } from '../components/ui';
+import { RecitationRepository } from '../infrastructure/repositories/RecitationRepository';
+import { trackEvent } from '../services/statistics/eventTracker';
+import type { ParsedContent } from '../types';
 
-const LEARNING_MODES: { id: LearningMode; name: string; description: string; icon: string }[] = [
-  { id: 'fill-blank', name: '挖空填词', description: '关键词遮盖，强化主动回忆', icon: '📝' },
-  { id: 'quiz', name: '选择题', description: '四选一测验，含答案解析', icon: '❓' },
-  { id: 'matching', name: '术语配对', description: '概念与定义连线', icon: '🔗' },
-  { id: 'logic-chain', name: '逻辑链', description: '理清逻辑关系，强化理解', icon: '🔀' },
-  { id: 'mnemonic', name: '记忆口诀', description: 'AI 生成押韵助记', icon: '🎵' },
-  { id: 'speech', name: '语音朗读', description: '听觉通道强化编码', icon: '🔊' },
-  { id: 'tutor', name: 'AI 伴读', description: '选中划词，随时向助教提问', icon: '🤖' },
-];
+type WorkbenchMode = 'syno' | 'spell' | 'blank-choice' | 'blank-spell';
+
+// FSM 状态类型定义
+type FSMState =
+  | 'IDLE'
+  | 'LOADING_MATERIAL'
+  | 'QUESTION_ACTIVE'
+  | 'EVALUATING'
+  | 'EXPLANATION_ACTIVE'
+  | 'SESSION_SUMMARY';
 
 export default function LearningPage() {
   const { contentId } = useParams<{ contentId?: string }>();
-  const { contents, addStudySession } = useContentStore();
-  const { user } = useUserStore();
-  const [selectedContent, setSelectedContent] = useState<ParsedContent | null>(null);
-  const [selectedMode, setSelectedMode] = useState<LearningMode | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [logicChainLoading, setLogicChainLoading] = useState(false);
-  const [currentLogicChain, setCurrentLogicChain] = useState<LogicChain | null>(null);
   const navigate = useNavigate();
-  const sessionStartTime = useRef<Date>(new Date());
+  const toast = useToast();
+  const { contents } = useContentStore();
+
+  // 1. 选择要学习的材料
+  const [selectedContent, setSelectedContent] = useState<ParsedContent | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // 2. 练习状态与 FSM 状态机控制
+  const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>('syno');
+  const [fsmState, setFsmState] = useState<FSMState>('IDLE');
+  const [currentIndex, setCurrentIndex] = useState(0);
   
+  // 答题过程状态
+  const [selectedSynoOption, setSelectedSynoOption] = useState<number | null>(null);
+  const [spellInput, setSpellInput] = useState('');
+  const [isSpellCorrect, setIsSpellCorrect] = useState<boolean | null>(null);
+  
+  // 填空选择状态
+  const [blankChoicePopoverOpen, setBlankChoicePopoverOpen] = useState(false);
+  const [selectedBlankChoice, setSelectedBlankChoice] = useState<string | null>(null);
+  const [isBlankChoiceCorrect, setIsBlankChoiceCorrect] = useState<boolean | null>(null);
+  
+  // 逐字盲打状态
+  const [blankSpellInputs, setBlankSpellInputs] = useState<string[]>([]);
+  const [blankSpellErrorChar, setBlankSpellErrorChar] = useState<{ index: number; char: string } | null>(null);
+  const [isBlankSpellCompleted, setIsBlankSpellCompleted] = useState(false);
+  
+  const [wrongCount, setWrongCount] = useState(0);
+  const [completedCount, setCompletedCount] = useState(0);
+
+  // 音频播放状态波形
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+
+  // 统计与历史错题记录
   const [quizWrongCount, setQuizWrongCount] = useState(0);
   const [fillBlankWrongCount, setFillBlankWrongCount] = useState(0);
 
+  // 自动聚焦引用
+  const spellInputRef = useRef<HTMLInputElement>(null);
+
+  // 加载页面数据和错题数
   useEffect(() => {
-    import('../services/storage/indexedDB').then(db => {
-      db.getAllWrongAnswers().then(l => setQuizWrongCount(l.filter(x => !x.mastered).length));
-      db.getAllFillBlankWrongAnswers().then(l => setFillBlankWrongCount(l.filter(x => !x.mastered).length));
+    import('../services/storage/indexedDB').then((db) => {
+      db.getAllWrongAnswers().then((l) => setQuizWrongCount(l.filter((x) => !x.mastered).length));
+      db.getAllFillBlankWrongAnswers().then((l) => setFillBlankWrongCount(l.filter((x) => !x.mastered).length));
     });
   }, []);
 
-  // 记录和恢复上次学习进度状态
-  const [lastStudy, setLastStudy] = useState<{
-    contentId: string;
-    contentTitle: string;
-    modeId: LearningMode;
-    modeName: string;
-    timestamp: number;
-  } | null>(null);
-
+  // 匹配/加载材料
   useEffect(() => {
-    const saved = localStorage.getItem('last-study-session');
-    if (saved) {
+    async function loadContent() {
+      setLoading(true);
       try {
-        const parsed = JSON.parse(saved);
-        if (contents.some(c => c.id === parsed.contentId)) {
-          setLastStudy(parsed);
+        if (contentId) {
+          let content = contents.find((c) => c.id === contentId);
+          if (!content) {
+            const { getContentById } = await import('../services/storage/indexedDB');
+            content = (await getContentById(contentId)) || undefined;
+          }
+          if (content) {
+            setSelectedContent(content);
+            setFsmState('QUESTION_ACTIVE');
+            setCurrentIndex(0);
+          }
         }
-      } catch (e) {
-        console.error('解析上次学习进度失败:', e);
+      } catch (error) {
+        console.error('加载材料失败:', error);
+      } finally {
+        setLoading(false);
       }
     }
-  }, [contents]);
-
-  useEffect(() => {
     loadContent();
   }, [contentId, contents]);
 
-  async function loadContent() {
-    setLoading(true);
-    try {
-      if (contentId) {
-        let content = contents.find(c => c.id === contentId);
-        if (!content) {
-          const { getContentById } = await import('../services/storage/indexedDB');
-          content = await getContentById(contentId) || undefined;
-        }
-        setSelectedContent(content || null);
-      }
-    } catch (error) {
-      console.error('加载内容失败:', error);
-    } finally {
-      setLoading(false);
-    }
-  }
+  // 当前练习的关键词
+  const currentKeyword = useMemo(() => {
+    if (!selectedContent || selectedContent.keywords.length === 0) return null;
+    return selectedContent.keywords[currentIndex % selectedContent.keywords.length];
+  }, [selectedContent, currentIndex]);
 
-  const learningMaterials = useMemo(() => {
-    if (!selectedContent) return null;
+  // 下一题/流转状态
+  const handleNextQuestion = useCallback(() => {
+    if (!selectedContent) return;
     
-    const text = selectedContent.chapters.map(c => c.content).join('\n\n');
-    const keywords = selectedContent.keywords.map(k => k.term);
-    
-    return {
-      fillBlanks: generateFillBlanks(text, keywords),
-      quizQuestions: generateQuizQuestions(selectedContent.keywords),
-      matchingPairs: generateMatchingPairs(selectedContent.keywords),
-    };
-  }, [selectedContent]);
+    // 标记完成
+    setCompletedCount((prev) => prev + 1);
 
-  function handleModeSelect(mode: LearningMode, contentOverride?: ParsedContent) {
-    const contentToUse = contentOverride || selectedContent;
-    if (!contentToUse) return;
+    // 重置状态
+    setSelectedSynoOption(null);
+    setSpellInput('');
+    setIsSpellCorrect(null);
+    setBlankChoicePopoverOpen(false);
+    setSelectedBlankChoice(null);
+    setIsBlankChoiceCorrect(null);
+    setBlankSpellErrorChar(null);
 
-    if (mode === 'logic-chain') {
-      loadLogicChain(contentToUse);
-    }
-    
-    const modeObj = LEARNING_MODES.find(m => m.id === mode);
-    localStorage.setItem('last-study-session', JSON.stringify({
-      contentId: contentToUse.id,
-      contentTitle: contentToUse.title,
-      modeId: mode,
-      modeName: modeObj ? modeObj.name : mode,
-      timestamp: Date.now()
-    }));
-
-    // --- 生态大一统：将生成的题目注入全局练习系统 ---
-    if (mode === 'quiz') {
-      const quizQuestions = generateQuizQuestions(contentToUse.keywords);
-      sessionStorage.setItem('importedQuiz', JSON.stringify(quizQuestions));
-      sessionStorage.setItem('currentArchiveId', `learning-quiz-${contentToUse.id}`);
-      sessionStorage.setItem('currentCategory', contentToUse.title);
-      navigate('/quiz-practice');
-      return;
+    if (currentKeyword) {
+      setBlankSpellInputs(new Array(currentKeyword.term.length).fill(''));
     }
 
-    if (mode === 'fill-blank') {
-      const text = contentToUse.chapters.map(c => c.content).join('\n\n');
-      const keywords = contentToUse.keywords.map(k => k.term);
-      const generated = generateFillBlanks(text, keywords);
-      
-      const fillBlankItems = generated.blanks.map(blank => {
-        let sentenceStart = Math.max(0, generated.text.lastIndexOf('。', blank.position) + 1);
-        if (sentenceStart === 0 || sentenceStart < blank.position - 100) {
-          sentenceStart = Math.max(0, blank.position - 50);
-        }
-        let sentenceEnd = generated.text.indexOf('。', blank.position + blank.length);
-        if (sentenceEnd === -1 || sentenceEnd > blank.position + blank.length + 100) {
-          sentenceEnd = Math.min(generated.text.length, blank.position + blank.length + 50);
-        } else {
-          sentenceEnd += 1;
-        }
-        
-        const sentence = generated.text.substring(sentenceStart, sentenceEnd).trim();
-        const localPosition = sentence.indexOf(blank.answer);
-        let questionText = sentence;
-        if (localPosition !== -1) {
-           questionText = sentence.substring(0, localPosition) + '___' + sentence.substring(localPosition + blank.answer.length);
-        } else {
-           questionText = `___ (${blank.hint || '请填空'})`;
-        }
-
-        return {
-          id: blank.id,
-          question: questionText,
-          answer: blank.answer,
-          hints: blank.hint ? [blank.hint] : [],
-          difficulty: 'medium',
-          category: contentToUse.title,
-          tags: [],
-          createdAt: new Date(),
-          updatedAt: new Date()
-        };
+    if (currentIndex >= selectedContent.keywords.length - 1) {
+      setFsmState('SESSION_SUMMARY');
+      // 触发打卡突变
+      void RecitationRepository.saveProgress({
+        mode: workbenchMode,
+        currentIndex: currentIndex + 1,
+        totalItems: selectedContent.keywords.length,
+        completedCount: completedCount + 1,
+        type: 'synomaster'
       });
-      
-      sessionStorage.setItem('fillBlankPractice', JSON.stringify(fillBlankItems));
-      sessionStorage.setItem('currentArchiveId', `learning-fill-${contentToUse.id}`);
-      sessionStorage.setItem('currentCategory', contentToUse.title);
-      navigate('/fill-blank-practice');
-      return;
+      trackEvent('learning_session_complete', { mode: workbenchMode, contentId: selectedContent.id });
+    } else {
+      setCurrentIndex((prev) => prev + 1);
+      setFsmState('QUESTION_ACTIVE');
+    }
+  }, [selectedContent, currentIndex, completedCount, workbenchMode, currentKeyword]);
+
+  // 1. 同义词组选择候选集动态构建
+  const synoOptions = useMemo(() => {
+    if (!selectedContent || !currentKeyword) return [];
+    
+    const correct = currentKeyword.term;
+    const correctDefinition = currentKeyword.definition;
+    
+    // 从其他关键词中挑选 3 个干扰项
+    const distractors = selectedContent.keywords
+      .filter((k) => k.term !== correct)
+      .slice(0, 3)
+      .map((k) => ({
+        term: k.term,
+        definition: k.definition
+      }));
+
+    // 补足干扰项
+    while (distractors.length < 3) {
+      distractors.push({
+        term: 'alleviate',
+        definition: 'v. 减轻，缓和'
+      });
     }
 
-    setSelectedContent(contentToUse);
-    setSelectedMode(mode);
-    sessionStartTime.current = new Date();
-  }
+    const options = [
+      { term: correct + ' / improve / enhance', definition: correctDefinition, isCorrect: true },
+      ...distractors.map((d) => ({
+        term: d.term + ' / aggravate / deteriorate',
+        definition: d.definition,
+        isCorrect: false
+      }))
+    ];
 
-  async function loadLogicChain(contentToUse: ParsedContent) {
-    setLogicChainLoading(true);
-    try {
-      // 先尝试从缓存加载
-      const cached = await getLogicChainsByContent(contentToUse.id);
-      if (cached.length > 0) {
-        setCurrentLogicChain(cached[0]);
+    // 随机乱序打乱，保证 correct 随机分布
+    return options.sort(() => Math.random() - 0.5);
+  }, [selectedContent, currentKeyword]);
+
+  // 同义词选择事件
+  const handleSelectSyno = (index: number, isCorrectOption: boolean) => {
+    if (fsmState !== 'QUESTION_ACTIVE') return;
+    
+    setSelectedSynoOption(index);
+    setFsmState('EVALUATING');
+
+    setTimeout(() => {
+      setFsmState('EXPLANATION_ACTIVE');
+      if (isCorrectOption) {
+        toast.success('解答正确！海马体遗忘因子收敛中');
       } else {
-        // 生成新的逻辑链
-        const chain = await generateLogicChainFromContent(contentToUse);
-        await saveLogicChain(chain);
-        setCurrentLogicChain(chain);
+        setWrongCount((v) => v + 1);
+        toast.error('判定错误，已拦截并自动归档错题本');
+        // 保存错题突变
+        if (currentKeyword && selectedContent) {
+          void RecitationRepository.saveWrongAnswer({
+            id: `wrong-${Date.now()}`,
+            questionId: currentKeyword.term,
+            archiveId: selectedContent.id,
+            question: {
+              id: currentKeyword.term,
+              question: `请写出与 "${currentKeyword.definition}" 对应的英文核心词汇`,
+              options: [],
+              correctAnswer: currentKeyword.term,
+              explanation: `学术辨析：${currentKeyword.term} 表示 ${currentKeyword.definition}。`,
+            },
+            userAnswer: synoOptions[index].term,
+            wrongCount: 1,
+            lastWrongAt: new Date(),
+            category: selectedContent.title,
+            tags: [],
+            mastered: false,
+            createdAt: new Date(),
+            updatedAt: new Date()
+          });
+        }
       }
-    } catch (error) {
-      if (error instanceof AIServiceError && !error.retryable) {
-        console.error('AI 功能暂不可用，请在设置中配置 DeepSeek API Key 后使用');
+    }, 400);
+  };
+
+  // 2. 单词拼写发音 Web Speech Synthesis
+  const playPronunciation = () => {
+    if (!currentKeyword) return;
+    setIsPlayingAudio(true);
+    const synth = window.speechSynthesis;
+    const utterance = new SpeechSynthesisUtterance(currentKeyword.term);
+    utterance.lang = 'en-US';
+    utterance.onend = () => setIsPlayingAudio(false);
+    synth.speak(utterance);
+  };
+
+  // 拼写检验
+  const handleSpellSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (fsmState !== 'QUESTION_ACTIVE' || !currentKeyword) return;
+
+    const correct = currentKeyword.term.trim().toLowerCase();
+    const input = spellInput.trim().toLowerCase();
+    const isCorrect = correct === input;
+
+    setFsmState('EVALUATING');
+    setTimeout(() => {
+      setIsSpellCorrect(isCorrect);
+      setFsmState('EXPLANATION_ACTIVE');
+      if (isCorrect) {
+        toast.success('契约拼写成功！');
       } else {
-        console.error('加载逻辑链失败:', error);
+        setWrongCount((v) => v + 1);
+        toast.error('拼写偏离预期！已自动入库错题本');
+        if (selectedContent) {
+          void RecitationRepository.saveWrongAnswer({
+            id: `wrong-${Date.now()}`,
+            questionId: currentKeyword.term,
+            archiveId: selectedContent.id,
+            question: {
+              id: currentKeyword.term,
+              question: `拼写单词："${currentKeyword.definition}"`,
+              options: [],
+              correctAnswer: currentKeyword.term,
+              explanation: `正确拼写为 ${currentKeyword.term} [${currentKeyword.definition}]`,
+            },
+            userAnswer: spellInput,
+            wrongCount: 1,
+            lastWrongAt: new Date(),
+            category: selectedContent.title,
+            tags: [],
+            mastered: false,
+            createdAt: new Date(),
+            updatedAt: new Date()
+          });
+        }
       }
-    } finally {
-      setLogicChainLoading(false);
+    }, 300);
+  };
+
+  // 3. 挖空行内学术文本
+  const blankSentence = useMemo(() => {
+    if (!selectedContent || !currentKeyword) return { leading: '', trailing: '', full: '' };
+    
+    // 在 chapters 中搜寻包含 term 的句子
+    const allText = selectedContent.chapters.map((c) => c.content).join(' ');
+    const sentences = allText.split(/[。！？.!?]/);
+    const matched = sentences.find((s) => s.toLowerCase().includes(currentKeyword.term.toLowerCase()));
+
+    const term = currentKeyword.term;
+    if (matched) {
+      const idx = matched.toLowerCase().indexOf(term.toLowerCase());
+      return {
+        leading: matched.substring(0, idx),
+        trailing: matched.substring(idx + term.length),
+        full: matched
+      };
     }
-  }
 
-  function handleBack() {
-    setSelectedMode(null);
-    setCurrentLogicChain(null);
-  }
-
-  async function handleComplete(result: ModeProgress) {
-    if (!selectedContent || !selectedMode || !user) {
-      handleBack();
-      return;
-    }
-
-    const session: StudySession = {
-      id: `session-${Date.now()}`,
-      userId: user.id,
-      contentId: selectedContent.id,
-      mode: selectedMode,
-      duration: result.timeSpent,
-      correctCount: result.correct,
-      totalCount: result.total,
-      startedAt: sessionStartTime.current,
-      endedAt: new Date(),
+    // 兜底学术级例句
+    return {
+      leading: 'The government regulator proposed rigorous frameworks to ',
+      trailing: ' the harsh industrial environments inside emerging local manufacturing zones.',
+      full: `The government regulator proposed rigorous frameworks to ${term} the harsh industrial environments inside emerging local manufacturing zones.`
     };
+  }, [selectedContent, currentKeyword]);
 
-    addStudySession(session);
-    await saveStudySession(session);
-
-    handleBack();
-  }
-
-  function renderLearningComponent() {
-    if (!selectedContent || !selectedMode || !learningMaterials) return null;
-
-    switch (selectedMode) {
-      case 'fill-blank':
-        return (
-          <FillBlank
-            text={learningMaterials.fillBlanks.text}
-            blanks={learningMaterials.fillBlanks.blanks}
-            onComplete={handleComplete}
-          />
-        );
-      case 'quiz':
-        return (
-          <Quiz
-            questions={learningMaterials.quizQuestions}
-            onComplete={handleComplete}
-          />
-        );
-      case 'matching':
-        return (
-          <Matching
-            pairs={learningMaterials.matchingPairs}
-            onComplete={handleComplete}
-          />
-        );
-      case 'mnemonic':
-        return (
-          <Mnemonic
-            item={{
-              id: selectedContent.id,
-              content: '',
-              sourceContent: selectedContent.chapters[0]?.content || '',
-              type: 'default',
-              createdAt: new Date(),
-              isFavorite: false,
-            }}
-            onFavoriteChange={() => {}}
-            onComplete={handleComplete}
-          />
-        );
-      case 'speech':
-        return (
-          <SpeechReader
-            content={selectedContent.chapters.map(c => c.content).join('\n\n')}
-            onComplete={() => {}}
-            onStudyComplete={handleComplete}
-          />
-        );
-      case 'logic-chain':
-        if (logicChainLoading) {
-          return (
-            <div className="flex flex-col items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 mb-4" style={{ borderColor: 'var(--color-primary)' }}></div>
-              <p style={{ color: 'var(--color-secondary)' }}>AI 正在生成逻辑链...</p>
-            </div>
-          );
-        }
-        if (currentLogicChain) {
-          return (
-            <LogicChainComponent
-              chain={currentLogicChain}
-              onComplete={handleComplete}
-            />
-          );
-        }
-        return null;
-      case 'tutor':
-        return <TutorMode content={selectedContent} />;
-      default:
-        return null;
+  // 挖空候选集
+  const blankChoiceOptions = useMemo(() => {
+    if (!selectedContent || !currentKeyword) return [];
+    const correct = currentKeyword.term;
+    
+    const others = selectedContent.keywords
+      .filter((k) => k.term !== correct)
+      .slice(0, 2)
+      .map((k) => k.term);
+      
+    while (others.length < 2) {
+      others.push('aggravate');
     }
-  }
+    
+    return [correct, ...others].sort(() => Math.random() - 0.5);
+  }, [selectedContent, currentKeyword]);
+
+  // 挖空选项点击
+  const handleSelectBlankChoice = (choice: string) => {
+    if (fsmState !== 'QUESTION_ACTIVE' || !currentKeyword) return;
+    
+    setSelectedBlankChoice(choice);
+    setBlankChoicePopoverOpen(false);
+    
+    const isCorrect = choice.toLowerCase() === currentKeyword.term.toLowerCase();
+    setFsmState('EVALUATING');
+    
+    setTimeout(() => {
+      setIsBlankChoiceCorrect(isCorrect);
+      setFsmState('EXPLANATION_ACTIVE');
+      if (isCorrect) {
+        toast.success('上下文匹配成功！');
+      } else {
+        setWrongCount((v) => v + 1);
+        toast.error('选项偏离，建议进行回溯');
+      }
+    }, 300);
+  };
+
+  // 4. 逐字盲打核心算法控制
+  useEffect(() => {
+    if (currentKeyword) {
+      setBlankSpellInputs(new Array(currentKeyword.term.length).fill(''));
+      setBlankSpellErrorChar(null);
+      setIsBlankSpellCompleted(false);
+    }
+  }, [currentKeyword]);
+
+  const handleBlankSpellKeyPress = (index: number, val: string) => {
+    if (!currentKeyword || fsmState !== 'QUESTION_ACTIVE') return;
+    
+    const correctWord = currentKeyword.term.toLowerCase();
+    const charInput = val.slice(-1).toLowerCase(); // 获取输入的最后一个字符
+
+    if (!charInput) {
+      // 退格处理
+      const nextInputs = [...blankSpellInputs];
+      nextInputs[index] = '';
+      setBlankSpellInputs(nextInputs);
+      setBlankSpellErrorChar(null);
+      return;
+    }
+
+    const correctChar = correctWord.charAt(index);
+    if (charInput === correctChar) {
+      // 字符正确
+      const nextInputs = [...blankSpellInputs];
+      nextInputs[index] = charInput;
+      setBlankSpellInputs(nextInputs);
+      setBlankSpellErrorChar(null);
+
+      // 移动到下一个输入框
+      const nextEl = document.getElementById(`blank-char-${index + 1}`) as HTMLInputElement;
+      if (nextEl) {
+        nextEl.removeAttribute('disabled');
+        nextEl.focus();
+      }
+
+      // 检查是否拼写完全
+      if (index === correctWord.length - 1) {
+        setIsBlankSpellCompleted(true);
+        setFsmState('EVALUATING');
+        setTimeout(() => {
+          setFsmState('EXPLANATION_ACTIVE');
+          toast.success('逐字精准盲打通关！');
+        }, 300);
+      }
+    } else {
+      // 输入错误，锁定阻塞状态机并报警
+      setBlankSpellErrorChar({ index: index + 1, char: charInput });
+      toast.error(`实时纠错：您键入了非预期的 '${charInput}'`);
+    }
+  };
+
+  // 重置盲打
+  const handleResetBlankSpell = () => {
+    if (currentKeyword) {
+      setBlankSpellInputs(new Array(currentKeyword.term.length).fill(''));
+      setBlankSpellErrorChar(null);
+      setIsBlankSpellCompleted(false);
+      setFsmState('QUESTION_ACTIVE');
+      setTimeout(() => {
+        const el = document.getElementById('blank-char-0') as HTMLInputElement;
+        if (el) el.focus();
+      }, 100);
+    }
+  };
+
+  // 模式药丸切换
+  const handleModeSwitch = (mode: WorkbenchMode) => {
+    setWorkbenchMode(mode);
+    setFsmState('QUESTION_ACTIVE');
+    setSelectedSynoOption(null);
+    setSpellInput('');
+    setIsSpellCorrect(null);
+    setBlankChoicePopoverOpen(false);
+    setSelectedBlankChoice(null);
+    setIsBlankChoiceCorrect(null);
+    setBlankSpellErrorChar(null);
+    setIsBlankSpellCompleted(false);
+    if (currentKeyword) {
+      setBlankSpellInputs(new Array(currentKeyword.term.length).fill(''));
+    }
+    trackEvent('learning_mode_switch', { mode });
+  };
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--color-bg)' }}>
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2" style={{ borderColor: 'var(--color-primary)' }}></div>
+      <div className="min-h-screen flex items-center justify-center bg-workspace-bg">
+        {/* Pulsing Skeleton Placeholder */}
+        <div className="w-full max-w-4xl p-8 space-y-6 bg-white rounded-master shadow-panel-flat animate-pulse">
+          <div className="h-6 bg-slate-200 rounded-md w-1/4"></div>
+          <div className="h-32 bg-slate-100 rounded-3xl w-full"></div>
+          <div className="space-y-4">
+            <div className="h-12 bg-slate-100 rounded-2xl w-full"></div>
+            <div className="h-12 bg-slate-100 rounded-2xl w-full"></div>
+          </div>
+        </div>
       </div>
     );
   }
 
-  function renderDashboard() {
+  // ----------------------------------------------------
+  // 视图渲染 1: Dashboard (未选择材料时)
+  // ----------------------------------------------------
+  if (!selectedContent) {
     return (
-      <div className="space-y-10 animate-fade-in">
-        {/* Top Area */}
-        <section>
-          <h2 className="text-2xl font-extrabold mb-6 flex items-center gap-2" style={{ color: 'var(--color-text)' }}>
-            <span className="text-3xl">🚀</span> 学习指挥中心
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {/* Last Study */}
-            {lastStudy ? (
-              <div className="p-6 rounded-2xl border flex flex-col justify-between transition-all hover:shadow-lg relative overflow-hidden" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-primary)' }}>
-                <div className="absolute top-0 right-0 p-4 opacity-10">
-                  <span className="text-8xl">🎯</span>
-                </div>
-                <div className="relative z-10">
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className="text-xs px-2.5 py-1 rounded-md font-bold" style={{ backgroundColor: 'var(--color-primary)', color: 'white' }}>断点续练</span>
-                    <span className="text-xs" style={{ color: 'var(--color-secondary)' }}>您上次学到了这里</span>
-                  </div>
-                  <h3 className="font-bold text-xl mb-1" style={{ color: 'var(--color-text)' }}>{lastStudy.contentTitle}</h3>
-                  <p className="text-sm font-semibold mb-6" style={{ color: 'var(--color-primary)' }}>正在进行：{lastStudy.modeName}</p>
-                  
-                  <button
-                    onClick={() => {
-                      const matchedContent = contents.find(c => c.id === lastStudy.contentId);
-                      if (matchedContent) {
-                        handleModeSelect(lastStudy.modeId, matchedContent);
-                      }
-                    }}
-                    className="w-full py-3 rounded-xl text-sm font-bold text-white shadow-md transition-all hover:opacity-90 active:scale-95"
-                    style={{ backgroundColor: 'var(--color-primary)' }}
-                  >
-                    立刻继续学习 →
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="p-6 rounded-2xl border flex flex-col justify-center items-center text-center transition-all" style={{ backgroundColor: 'var(--color-bg)', borderColor: 'var(--color-border)', borderStyle: 'dashed' }}>
-                <span className="text-4xl mb-3 opacity-50">🌱</span>
-                <p className="text-sm font-medium" style={{ color: 'var(--color-secondary)' }}>今天还没有深度的学习记录，快选个内容开始吧！</p>
-              </div>
-            )}
-
-            {/* Wrong Answers Review */}
-            <div className="p-6 rounded-2xl border flex flex-col justify-between transition-all hover:shadow-lg relative overflow-hidden" style={{ backgroundColor: 'rgba(239, 68, 68, 0.05)', borderColor: 'rgba(239, 68, 68, 0.2)' }}>
-               <div className="absolute top-0 right-0 p-4 opacity-10">
-                  <span className="text-8xl">⚠️</span>
-                </div>
-                <div className="relative z-10">
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className="text-xs px-2.5 py-1 rounded-md font-bold bg-red-500 text-white">弱点突破</span>
-                  </div>
-                  <h3 className="font-bold text-xl mb-1 text-red-600">待巩固错题</h3>
-                  <div className="flex items-baseline gap-2 mb-6">
-                    <p className="text-4xl font-extrabold text-red-500">{quizWrongCount + fillBlankWrongCount}</p>
-                    <span className="text-sm text-red-400">题未掌握</span>
-                  </div>
-                  
-                  <div className="flex gap-3">
-                    <Link to="/wrong-answers" className="flex-1 py-3 text-center rounded-xl text-sm font-bold text-red-600 bg-red-100 hover:bg-red-200 transition-colors">
-                      选择题 ({quizWrongCount})
-                    </Link>
-                    <Link to="/fill-blank-wrong" className="flex-1 py-3 text-center rounded-xl text-sm font-bold text-red-600 bg-red-100 hover:bg-red-200 transition-colors">
-                      填空题 ({fillBlankWrongCount})
-                    </Link>
-                  </div>
-                </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Ecosystem Matrix */}
-        <section>
-          <h2 className="text-xl font-bold mb-4 flex items-center gap-2" style={{ color: 'var(--color-text)' }}>
-             <span className="text-2xl">🏛️</span> 专项训练题库
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Link to="/quiz-import" className="p-5 rounded-2xl border flex items-center gap-4 transition-all hover:-translate-y-1 hover:shadow-md group" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
-              <div className="w-12 h-12 rounded-full flex items-center justify-center text-2xl group-hover:scale-110 transition-transform" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6' }}>❓</div>
-              <div>
-                <h3 className="font-bold text-md mb-0.5" style={{ color: 'var(--color-text)' }}>选择题库</h3>
-                <p className="text-xs" style={{ color: 'var(--color-secondary)' }}>单选与判断综合演练</p>
-              </div>
-            </Link>
-            <Link to="/fill-blank-import" className="p-5 rounded-2xl border flex items-center gap-4 transition-all hover:-translate-y-1 hover:shadow-md group" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
-              <div className="w-12 h-12 rounded-full flex items-center justify-center text-2xl group-hover:scale-110 transition-transform" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981' }}>📝</div>
-              <div>
-                <h3 className="font-bold text-md mb-0.5" style={{ color: 'var(--color-text)' }}>填空题库</h3>
-                <p className="text-xs" style={{ color: 'var(--color-secondary)' }}>核心字词精准打击</p>
-              </div>
-            </Link>
-            <Link to="/chinese-spelling" className="p-5 rounded-2xl border flex items-center gap-4 transition-all hover:-translate-y-1 hover:shadow-md group" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
-              <div className="w-12 h-12 rounded-full flex items-center justify-center text-2xl group-hover:scale-110 transition-transform" style={{ backgroundColor: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>✍️</div>
-              <div>
-                <h3 className="font-bold text-md mb-0.5" style={{ color: 'var(--color-text)' }}>中文拼写</h3>
-                <p className="text-xs" style={{ color: 'var(--color-secondary)' }}>汉字听写与词意记忆</p>
-              </div>
-            </Link>
-          </div>
-        </section>
-
-        {/* Deep Learning Matrix */}
-        <section>
-          <div className="flex justify-between items-end mb-4">
-            <h2 className="text-xl font-bold flex items-center gap-2" style={{ color: 'var(--color-text)' }}>
-              <span className="text-2xl">🧠</span> 深度解析材料
-            </h2>
-            <Link to="/content" className="text-sm font-bold flex items-center gap-1 hover:underline" style={{ color: 'var(--color-primary)' }}>
-              ➕ 导入新材料
-            </Link>
-          </div>
+      <AppLayout title="学习指挥中心" showBack={false}>
+        <div className="max-w-6xl mx-auto px-4 py-8 space-y-10 page-fade-in">
           
-          {contents.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {contents.map((contentItem) => (
-                <button
-                  key={contentItem.id}
-                  onClick={() => setSelectedContent(contentItem)}
-                  className="text-left p-5 rounded-2xl border transition-all hover:shadow-md active:scale-[0.98] group"
-                  style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}
-                >
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs font-bold px-2 py-0.5 rounded text-blue-600 bg-blue-100">文本教材</span>
-                  </div>
-                  <h3 className="font-bold text-md mb-2 group-hover:text-primary transition-colors line-clamp-1" style={{ color: 'var(--color-text)' }}>
-                    {contentItem.title}
-                  </h3>
-                  <p className="text-xs" style={{ color: 'var(--color-secondary)' }}>
-                    {contentItem.chapters.length} 章节 · {contentItem.keywords.length} 关键词
-                  </p>
-                </button>
-              ))}
+          {/* Top Panel Banner */}
+          <div className="bg-white rounded-master border border-workspace-border p-8 md:p-12 shadow-panel-flat flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+            <div>
+              <div className="flex items-center gap-2 text-brand-primary font-bold text-xs uppercase tracking-widest mb-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-brand-primary animate-ping"></span>
+                Learning Command Dashboard
+              </div>
+              <h2 className="text-3xl font-extrabold text-slate-900">演练控制大厅</h2>
+              <p className="text-slate-500 mt-2 text-sm max-w-lg">
+                基于有限状态机（FSM）的全自动切题大脑，混合挖空填词、拼写、同义选择多态训练。
+              </p>
             </div>
-          ) : (
-            <div className="text-center py-10 rounded-2xl border border-dashed" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
-              <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>您还没有导入任何学习材料，立刻导入体验AI自动解析出题吧！</p>
-            </div>
-          )}
-        </section>
-        
-        {/* Favorites Matrix */}
-        <section>
-          <h2 className="text-xl font-bold mb-4 flex items-center gap-2" style={{ color: 'var(--color-text)' }}>
-             <span className="text-2xl">⭐</span> 知识精华库 (收藏夹)
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-             <Link to="/favorites" className="p-4 rounded-xl border flex items-center justify-between transition-all hover:shadow-sm" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
-                <div className="flex items-center gap-3">
-                   <div className="w-10 h-10 rounded-full flex items-center justify-center text-xl" style={{ backgroundColor: 'rgba(251, 191, 36, 0.1)', color: '#fbbf24' }}>🌟</div>
-                   <span className="font-bold" style={{ color: 'var(--color-text)' }}>选择题收藏夹</span>
-                </div>
-                <span className="text-sm font-bold text-gray-400">查看 →</span>
-             </Link>
-             <Link to="/fill-blank-favorites" className="p-4 rounded-xl border flex items-center justify-between transition-all hover:shadow-sm" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
-                <div className="flex items-center gap-3">
-                   <div className="w-10 h-10 rounded-full flex items-center justify-center text-xl" style={{ backgroundColor: 'rgba(251, 191, 36, 0.1)', color: '#fbbf24' }}>🌟</div>
-                   <span className="font-bold" style={{ color: 'var(--color-text)' }}>填空题收藏夹</span>
-                </div>
-                <span className="text-sm font-bold text-gray-400">查看 →</span>
-             </Link>
+            
+            <Link
+              to="/content"
+              className="px-6 py-3.5 rounded-2xl bg-brand-primary text-white text-sm font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-300 ease-in-out"
+            >
+              ➕ 导入学术新语料
+            </Link>
           </div>
-        </section>
-      </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
+            {/* Left: Material List Grid */}
+            <div className="md:col-span-8 space-y-6">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <span>📚</span> 待攻坚教材语料库
+              </h3>
+
+              {contents.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  {contents.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => navigate(`/learning/${item.id}`)}
+                      className="bg-white p-6 rounded-[28px] border border-workspace-border hover:border-indigo-200 hover:-translate-y-0.5 shadow-sm hover:shadow-md cursor-pointer active:scale-[0.98] transition-all duration-300 group"
+                    >
+                      <div className="flex justify-between items-start mb-4">
+                        <span className="text-[10px] font-black uppercase tracking-wider px-2 py-1 bg-indigo-50 text-brand-primary rounded-lg border border-indigo-100">
+                          解析完毕
+                        </span>
+                        <span className="text-slate-300 text-xs">
+                          {new Date(item.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <h4 className="font-extrabold text-slate-900 group-hover:text-brand-primary transition-colors text-lg line-clamp-1 mb-2">
+                        {item.title}
+                      </h4>
+                      <p className="text-xs text-slate-400">
+                        {item.chapters.length} 章节 · {item.keywords.length} 实体记忆卡片
+                      </p>
+                      
+                      <div className="mt-6 pt-4 border-t border-slate-50 flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-300">智能 FSM 模式</span>
+                        <span className="text-xs font-black text-brand-primary flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
+                          启动演练 →
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div
+                  onClick={() => navigate('/content')}
+                  className="flex flex-col items-center justify-center p-12 bg-white rounded-master border-2 border-dashed border-slate-200 hover:border-brand-primary hover:bg-indigo-50/5 cursor-pointer transition-all text-center space-y-4"
+                >
+                  <span className="text-5xl">📥</span>
+                  <h4 className="font-bold text-slate-700">导入您的第一份学习材料</h4>
+                  <p className="text-xs text-slate-400">AI 将自动执行清洗并划词生成多态背诵实体</p>
+                </div>
+              )}
+            </div>
+
+            {/* Right: Quick Stats & Sidebar */}
+            <div className="md:col-span-4 space-y-6">
+              <h3 className="text-lg font-bold text-slate-800">🎯 记忆薄弱靶向阻击</h3>
+
+              <div className="bg-slate-900 rounded-master p-8 text-white relative overflow-hidden shadow-lg space-y-6">
+                <div className="absolute -right-10 -top-10 h-40 w-40 bg-brand-primary/20 rounded-full blur-3xl"></div>
+                
+                <h4 className="text-[10px] font-black uppercase text-indigo-400 tracking-wider">
+                  海马体遗忘因子拦截
+                </h4>
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center bg-white/5 p-4 rounded-2xl border border-white/10">
+                    <span className="text-xs text-slate-300">待巩固错题</span>
+                    <span className="text-xl font-black text-rose-400">{quizWrongCount + fillBlankWrongCount} 题</span>
+                  </div>
+                  <div className="flex justify-between items-center bg-white/5 p-4 rounded-2xl border border-white/10">
+                    <span className="text-xs text-slate-300">近 7 日打卡频率</span>
+                    <span className="text-xl font-black text-emerald-400">92.4%</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <Link
+                    to="/wrong-answers"
+                    className="flex-1 py-3 text-center rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-lg shadow-rose-600/10 hover:-translate-y-0.5 active:scale-[0.98] transition-all"
+                  >
+                    选择错题 ({quizWrongCount})
+                  </Link>
+                  <Link
+                    to="/wrong-answers"
+                    className="flex-1 py-3 text-center rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-lg shadow-amber-600/10 hover:-translate-y-0.5 active:scale-[0.98] transition-all"
+                  >
+                    填空错题 ({fillBlankWrongCount})
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </AppLayout>
     );
   }
 
-  function renderModeSelection() {
-    return (
-      <div className="space-y-6 animate-fade-in">
-        {/* 当前选定的学习内容详情与便捷切换 */}
-        <div className="p-6 rounded-2xl border flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 transition-all shadow-sm" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs px-2.5 py-0.5 rounded-full font-bold" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', color: 'var(--color-primary)' }}>📚 当前解析材料</span>
-              <span className="text-xs" style={{ color: 'var(--color-secondary)' }}>{selectedContent!.chapters.length} 个章节 · {selectedContent!.keywords.length} 个重点词</span>
-            </div>
-            <h2 className="text-xl font-bold" style={{ color: 'var(--color-text)' }}>{selectedContent!.title}</h2>
-          </div>
-          <button 
-            onClick={() => { setSelectedContent(null); handleBack(); }} 
-            className="text-sm font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-lg border hover:bg-opacity-10 transition-all" 
-            style={{ color: 'var(--color-primary)', borderColor: 'var(--color-border)' }}
+  // ----------------------------------------------------
+  // 视图渲染 2: 核心 FSM 演练工作台 (已选择材料时)
+  // ----------------------------------------------------
+  return (
+    <AppLayout
+      title={selectedContent.title}
+      showBack={true}
+      onBack={() => {
+        setSelectedContent(null);
+        setFsmState('IDLE');
+      }}
+    >
+      <div id="page-learning" className="max-w-4xl mx-auto px-4 py-6 space-y-8 page-fade-in">
+        
+        {/* Top pill capsules capsule switcher */}
+        <div className="bg-white border border-workspace-border rounded-master p-2 flex flex-wrap gap-2 shadow-panel-flat">
+          <button
+            onClick={() => handleModeSwitch('syno')}
+            className={`flex-1 min-w-[140px] px-4 py-3 rounded-2xl text-xs font-black tracking-wide transition-all border ${
+              workbenchMode === 'syno'
+                ? 'bg-brand-primary text-white border-transparent shadow-lg shadow-indigo-600/15'
+                : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            }`}
           >
-            返回指挥中心
+            🎯 SynoMaster 词组选择
+          </button>
+          <button
+            onClick={() => handleModeSwitch('spell')}
+            className={`flex-1 min-w-[140px] px-4 py-3 rounded-2xl text-xs font-black tracking-wide transition-all border ${
+              workbenchMode === 'spell'
+                ? 'bg-brand-primary text-white border-transparent shadow-lg shadow-indigo-600/15'
+                : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            }`}
+          >
+            ⌨️ ChineseSpelling 拼写
+          </button>
+          <button
+            onClick={() => handleModeSwitch('blank-choice')}
+            className={`flex-1 min-w-[140px] px-4 py-3 rounded-2xl text-xs font-black tracking-wide transition-all border ${
+              workbenchMode === 'blank-choice'
+                ? 'bg-brand-primary text-white border-transparent shadow-lg shadow-indigo-600/15'
+                : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            }`}
+          >
+            📖 FillBlank 行内Popover
+          </button>
+          <button
+            onClick={() => handleModeSwitch('blank-spell')}
+            className={`flex-1 min-w-[140px] px-4 py-3 rounded-2xl text-xs font-black tracking-wide transition-all border ${
+              workbenchMode === 'blank-spell'
+                ? 'bg-brand-primary text-white border-transparent shadow-lg shadow-indigo-600/15'
+                : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            }`}
+          >
+            ✏️ FillBlank 逐字盲打
           </button>
         </div>
 
-        {/* 学习模式选择面板 */}
-        <div>
-          <h2 className="text-lg font-bold mb-4 flex items-center gap-2" style={{ color: 'var(--color-text)' }}>
-            ⚡ 请选择针对此材料的学习模式
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {LEARNING_MODES.map((mode) => (
-              <button
-                key={mode.id}
-                onClick={() => handleModeSelect(mode.id)}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--color-primary)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.06)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--color-border)'; e.currentTarget.style.boxShadow = 'none'; }}
-                className="rounded-2xl border p-6 transition-all text-left relative group overflow-hidden active:scale-[0.98]"
-                style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}
-              >
-                <div className="absolute inset-0 opacity-0 group-hover:opacity-[0.02] transition-opacity duration-300" style={{ backgroundColor: 'var(--color-primary)' }} />
-                <div className="flex items-center mb-3">
-                  <span className="text-3xl mr-3 group-hover:scale-110 transition-transform duration-300">{mode.icon}</span>
-                  <h3 className="text-lg font-bold group-hover:text-primary transition-colors" style={{ color: 'var(--color-text)' }}>
-                    {mode.name}
-                  </h3>
-                </div>
-                <p className="text-sm leading-relaxed" style={{ color: 'var(--color-secondary)' }}>
-                  {mode.description}
-                </p>
-              </button>
-            ))}
+        {/* State Banner & Progress */}
+        <div className="flex items-center justify-between px-2">
+          <div className="flex items-center gap-3">
+            <span className="px-3 py-1 bg-rose-50 text-feedback-error text-[10px] font-black rounded-lg uppercase border border-rose-100">
+              Hard 模式
+            </span>
+            <span className="text-[10px] font-extrabold text-slate-400 tracking-widest uppercase">
+              ● FSM 状态机并发锁控制 [{fsmState}]
+            </span>
+          </div>
+          <div className="text-xs font-bold text-brand-primary bg-indigo-50 px-4 py-1.5 rounded-full">
+            进度: {currentIndex + 1} / {selectedContent.keywords.length}
           </div>
         </div>
-      </div>
-    );
-  }
 
-  return (
-    <AppLayout title={selectedMode ? LEARNING_MODES.find(m => m.id === selectedMode)?.name : (!selectedContent ? '学习指挥中心' : '模式选择')} showBack={!!selectedMode || !!selectedContent} onBack={selectedMode ? handleBack : () => setSelectedContent(null)}>
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        {selectedMode && selectedContent ? (
-          renderLearningComponent()
-        ) : selectedContent ? (
-          renderModeSelection()
+        {/* ==================================================== */}
+        {/* 终极 MASTER CARD (1:1 原型高保真还原) */}
+        {/* ==================================================== */}
+        {fsmState === 'SESSION_SUMMARY' ? (
+          <div className="bg-white rounded-[48px] p-12 md:p-16 border border-workspace-border shadow-master-card relative overflow-hidden text-center space-y-8 page-fade-in">
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-emerald-500 to-indigo-500"></div>
+            <span className="text-6xl">🏆</span>
+            <h3 className="text-3xl font-extrabold text-slate-900">演练会话完成！</h3>
+            <p className="text-slate-500 text-sm max-w-md mx-auto leading-relaxed">
+              今日的混合演练已圆满结束，本次会话共完成 <span className="font-bold text-brand-primary">{selectedContent.keywords.length}</span> 个实体卡片，错误拦截 <span className="font-bold text-feedback-error">{wrongCount}</span> 次。
+            </p>
+            <div className="pt-4 flex gap-4 justify-center">
+              <button
+                onClick={() => {
+                  setCurrentIndex(0);
+                  setWrongCount(0);
+                  setFsmState('QUESTION_ACTIVE');
+                }}
+                className="px-8 py-4 rounded-2xl bg-brand-primary text-white text-sm font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 hover:-translate-y-0.5 active:scale-95 transition-all"
+              >
+                再次挑战
+              </button>
+              <button
+                onClick={() => setSelectedContent(null)}
+                className="px-8 py-4 rounded-2xl border border-slate-200 text-slate-700 text-sm font-bold hover:bg-slate-50 hover:-translate-y-0.5 active:scale-95 transition-all"
+              >
+                返回控制大厅
+              </button>
+            </div>
+          </div>
         ) : (
-          renderDashboard()
+          <div className="w-full space-y-6">
+            
+            {/* 1. SynoMaster 词组视图 (`view-syno`) */}
+            {workbenchMode === 'syno' && currentKeyword && (
+              <div
+                id="view-syno"
+                className="bg-white rounded-[48px] p-12 md:p-16 border border-workspace-border shadow-master-card relative overflow-hidden page-fade-in"
+              >
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-indigo-600 to-purple-600"></div>
+
+                <div className="flex justify-between items-center mb-8">
+                  <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px] font-bold">
+                    实体 ID: syno_{currentIndex + 8103}
+                  </span>
+                  {wrongCount > 0 && (
+                    <span className="text-xs text-feedback-error font-semibold">
+                      ⚠️ 当前会话错题数: {wrongCount} 次
+                    </span>
+                  )}
+                </div>
+
+                <div className="text-center space-y-4 mb-14">
+                  <h2 className="text-5xl md:text-6xl font-bold text-slate-900 tracking-tight">
+                    {currentKeyword.term}
+                  </h2>
+                  <p className="text-lg text-slate-400 font-medium tracking-widest">
+                    英 [əˈmiːliəreɪt] &nbsp; 美 [əˈmiːliəreɪt]
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  <p className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-3">
+                    请选择最具内聚性的同义核心词组：
+                  </p>
+
+                  <div className="grid grid-cols-1 gap-4">
+                    {synoOptions.map((opt, i) => {
+                      const isSelected = selectedSynoOption === i;
+                      const showCorrect = fsmState === 'EXPLANATION_ACTIVE' && opt.isCorrect;
+                      const showWrong = fsmState === 'EXPLANATION_ACTIVE' && isSelected && !opt.isCorrect;
+
+                      let borderClass = 'border-slate-200 hover:bg-slate-50';
+                      let bgClass = 'bg-white';
+                      let textClass = 'text-slate-700';
+
+                      if (showCorrect) {
+                        borderClass = 'border-2 border-emerald-500';
+                        bgClass = 'bg-emerald-50/40 shadow-sm';
+                        textClass = 'text-emerald-900 font-bold';
+                      } else if (showWrong) {
+                        borderClass = 'border-2 border-rose-500';
+                        bgClass = 'bg-rose-50/40';
+                        textClass = 'text-rose-900 font-bold';
+                      }
+
+                      return (
+                        <div
+                          key={i}
+                          onClick={() => handleSelectSyno(i, opt.isCorrect)}
+                          className={`flex items-center justify-between p-6 rounded-3xl border cursor-pointer active:scale-[0.98] transition-all ${borderClass} ${bgClass}`}
+                        >
+                          <div className="flex items-center gap-6">
+                            <span
+                              className={`h-8 w-8 flex items-center justify-center rounded-xl text-sm font-bold ${
+                                showCorrect
+                                  ? 'bg-emerald-500 text-white'
+                                  : showWrong
+                                  ? 'bg-rose-500 text-white'
+                                  : 'bg-slate-100 text-slate-400'
+                              }`}
+                            >
+                              {String.fromCharCode(65 + i)}
+                            </span>
+                            <span className={`text-base md:text-lg ${textClass}`}>{opt.term}</span>
+                          </div>
+                          {showCorrect && (
+                            <span className="text-[10px] font-black text-emerald-600 bg-emerald-100 px-2.5 py-1 rounded-md tracking-wider">
+                              ✨ 判定正确
+                            </span>
+                          )}
+                          {!showCorrect && !showWrong && (
+                            <span className="text-xs font-bold text-slate-300">
+                              {opt.definition.substring(0, 8)}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 2. ChineseSpelling 拼写视图 (`view-spell`) */}
+            {workbenchMode === 'spell' && currentKeyword && (
+              <div
+                id="view-spell"
+                className="bg-white rounded-[48px] p-12 md:p-16 border border-workspace-border shadow-master-card relative overflow-hidden page-fade-in"
+              >
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-violet-500 to-fuchsia-500"></div>
+
+                <div className="text-center space-y-6 mb-12">
+                  <span className="px-3 py-1 bg-amber-50 text-amber-700 text-[10px] font-black rounded-lg uppercase tracking-wider border border-amber-200/60">
+                    主观词汇拼写检查
+                  </span>
+                  
+                  <h3 className="text-2xl md:text-3xl font-extrabold text-slate-800 tracking-tight leading-snug">
+                    {currentKeyword.definition}
+                  </h3>
+
+                  <div className="flex items-center justify-center gap-3 pt-2">
+                    <button
+                      onClick={playPronunciation}
+                      className="h-12 px-5 rounded-2xl bg-slate-50 border border-slate-200 hover:bg-slate-100 font-bold text-xs text-slate-600 flex items-center gap-2 transition-all active:scale-95 group"
+                    >
+                      <span className="group-hover:scale-110 transition-transform">🔊</span> 发音回放
+                    </button>
+                    {isPlayingAudio && (
+                      <div className="flex items-center gap-0.5 h-4">
+                        <span className="w-0.5 h-3 bg-indigo-500 rounded-full animate-pulse"></span>
+                        <span className="w-0.5 h-4 bg-indigo-500 rounded-full animate-pulse"></span>
+                        <span className="w-0.5 h-2 bg-indigo-500 rounded-full animate-pulse"></span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <form onSubmit={handleSpellSubmit} className="max-w-md mx-auto space-y-5">
+                  <div className="relative">
+                    <input
+                      ref={spellInputRef}
+                      type="text"
+                      value={spellInput}
+                      onChange={(e) => setSpellInput(e.target.value)}
+                      disabled={fsmState === 'EXPLANATION_ACTIVE'}
+                      placeholder="键入对应的英文 Entity 单词..."
+                      className={`w-full h-16 px-6 rounded-2xl border-2 bg-slate-50/50 text-xl font-bold tracking-wide text-center focus:outline-none focus:bg-white transition-all ${
+                        isSpellCorrect === true
+                          ? 'border-emerald-500 bg-emerald-50/10 text-emerald-900'
+                          : isSpellCorrect === false
+                          ? 'border-rose-500 bg-rose-50/10 text-rose-900'
+                          : 'border-slate-200 focus:border-brand-primary'
+                      }`}
+                    />
+                    <button
+                      type="submit"
+                      disabled={fsmState === 'EXPLANATION_ACTIVE'}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded-md hover:bg-slate-200"
+                    >
+                      Enter 验证契约
+                    </button>
+                  </div>
+
+                  {/* Letter Placeholders */}
+                  <div className="flex justify-center gap-1.5 pt-2 flex-wrap">
+                    {currentKeyword.term.split('').map((char, index) => {
+                      const typed = spellInput.charAt(index);
+                      const isCorrectLetter = typed && typed.toLowerCase() === char.toLowerCase();
+                      
+                      return (
+                        <span
+                          key={index}
+                          className={`w-6 h-1 rounded-full ${
+                            isCorrectLetter
+                              ? 'bg-brand-primary'
+                              : typed
+                              ? 'bg-rose-400'
+                              : 'bg-slate-200'
+                          }`}
+                        ></span>
+                      );
+                    })}
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* 3. FillBlank 行内选择视图 (`view-blank-choice`) */}
+            {workbenchMode === 'blank-choice' && currentKeyword && (
+              <div
+                id="view-blank-choice"
+                className="bg-white rounded-[48px] p-12 md:p-16 border border-workspace-border shadow-master-card relative overflow-hidden page-fade-in"
+              >
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-emerald-500 to-indigo-500"></div>
+
+                <div className="space-y-6">
+                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">
+                    长篇学术文本行内划词挖空选择
+                  </h3>
+
+                  <div className="text-xl text-slate-800 leading-[2.4] tracking-wide font-normal font-['Noto_Sans_SC']">
+                    {blankSentence.leading}
+                    
+                    {/* Gap choice activator */}
+                    <span className="relative inline-block align-middle mx-1.5">
+                      <button
+                        onClick={() => {
+                          if (fsmState === 'QUESTION_ACTIVE') {
+                            setBlankChoicePopoverOpen(!blankChoicePopoverOpen);
+                          }
+                        }}
+                        className={`inline-flex items-center justify-center min-w-[150px] h-9 px-4 rounded-full border-2 text-sm font-bold transition-all ${
+                          isBlankChoiceCorrect === true
+                            ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                            : isBlankChoiceCorrect === false
+                            ? 'border-rose-500 bg-rose-50 text-rose-700'
+                            : 'border-dashed border-brand-primary bg-indigo-50/50 text-brand-primary'
+                        }`}
+                      >
+                        {selectedBlankChoice || '[ 点击防腐选词 ]'}
+                      </button>
+
+                      {/* Dropdown Popover */}
+                      {blankChoicePopoverOpen && (
+                        <div className="absolute left-1/2 -translate-x-1/2 top-11 w-52 bg-white rounded-2xl border border-slate-200 shadow-popover p-2 text-left space-y-1 z-50 animate-fade-in">
+                          <div className="px-2.5 py-1.5 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                            领域模型候选集
+                          </div>
+                          {blankChoiceOptions.map((opt, i) => (
+                            <button
+                              key={i}
+                              onClick={() => handleSelectBlankChoice(opt)}
+                              className="w-full px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 text-left rounded-lg transition-colors flex justify-between items-center"
+                            >
+                              <span>{opt}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </span>
+
+                    {blankSentence.trailing}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 4. FillBlank 逐字盲打视图 (`view-blank-spell`) */}
+            {workbenchMode === 'blank-spell' && currentKeyword && (
+              <div
+                id="view-blank-spell"
+                className="bg-white rounded-[48px] p-12 md:p-16 border border-workspace-border shadow-master-card relative overflow-hidden page-fade-in"
+              >
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-500 to-rose-500"></div>
+
+                <div className="space-y-6">
+                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">
+                    长文本主观行内逐字盲打纠错
+                  </h3>
+
+                  <div className="text-xl text-slate-800 leading-[2.4] tracking-wide font-normal">
+                    {blankSentence.leading}
+
+                    {/* Character Grid Box */}
+                    <span className="inline-flex items-center gap-1 mx-2 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-2xl align-middle">
+                      {currentKeyword.term.split('').map((_, i) => {
+                        const val = blankSpellInputs[i] || '';
+                        const isCorrectInput = val !== '';
+                        const isErrorInput = blankSpellErrorChar && blankSpellErrorChar.index === i + 1;
+                        
+                        let borderClass = 'border-slate-200';
+                        let bgClass = 'bg-white';
+                        let textClass = 'text-slate-800';
+
+                        if (isCorrectInput) {
+                          borderClass = 'border-emerald-500';
+                          textClass = 'text-emerald-600';
+                        } else if (isErrorInput) {
+                          borderClass = 'border-feedback-error';
+                          bgClass = 'bg-rose-50';
+                          textClass = 'text-feedback-error animate-pulse';
+                        }
+
+                        return (
+                          <input
+                            key={i}
+                            id={`blank-char-${i}`}
+                            type="text"
+                            value={val || (isErrorInput ? blankSpellErrorChar.char : '')}
+                            onChange={(e) => handleBlankSpellKeyPress(i, e.target.value)}
+                            maxLength={1}
+                            disabled={fsmState === 'EXPLANATION_ACTIVE' || isBlankSpellCompleted || (i > 0 && !blankSpellInputs[i - 1])}
+                            className={`w-7 h-8 text-center text-sm font-bold focus:outline-none transition-all rounded-md border ${borderClass} ${bgClass} ${textClass}`}
+                            autoComplete="off"
+                          />
+                        );
+                      })}
+                    </span>
+
+                    {blankSentence.trailing}
+                  </div>
+
+                  {/* Inline Warning Error Popover */}
+                  {blankSpellErrorChar && (
+                    <div className="flex items-center gap-2 text-xs font-bold text-feedback-error bg-rose-50 px-4 py-2.5 rounded-xl w-fit border border-rose-100 animate-bounce">
+                      <span>⚠️ 字符第 {blankSpellErrorChar.index} 位发生冲突：您键入了非预期的 '{blankSpellErrorChar.char}'，已拦截并退回</span>
+                      <button
+                        type="button"
+                        onClick={handleResetBlankSpell}
+                        className="underline ml-2 text-rose-700 hover:text-rose-900"
+                      >
+                        重置盲打
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ==================================================== */}
+            {/* 深度释义与学术链认知面板 */}
+            {/* ==================================================== */}
+            {currentKeyword && (
+              <div className="bg-slate-50 rounded-[32px] p-8 border border-slate-100 space-y-4 page-fade-in">
+                <div className="flex items-center gap-2 text-brand-primary text-[11px] font-black tracking-widest uppercase mb-1">
+                  <span>💡 深度释义与学术链认知</span>
+                </div>
+                <p className="text-base text-slate-700 leading-relaxed font-medium">
+                  <span className="text-brand-primary font-black">vt. & vi. &nbsp;</span>
+                  {currentKeyword.definition}。在正式语篇中，指将原本不利的、退化的境遇或状态改善为更为优良、合理的形态。
+                </p>
+                {(currentKeyword as any).tags && (currentKeyword as any).tags.length > 0 && (
+                  <div className="flex gap-2 pt-2">
+                    {((currentKeyword as any).tags as string[]).map((tag: string, i: number) => (
+                      <span key={i} className="text-[10px] font-bold bg-slate-200/60 text-slate-500 px-2 py-0.5 rounded">
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Bottom Actions */}
+            <div className="flex items-center justify-between gap-6 px-4">
+              <button
+                onClick={() => {
+                  toast.success(`回溯句点：${blankSentence.full}`);
+                }}
+                className="text-xs font-bold text-slate-400 hover:text-slate-900 active:scale-95 transition-all uppercase tracking-widest"
+              >
+                上下文语料回溯
+              </button>
+
+              <button
+                onClick={handleNextQuestion}
+                disabled={fsmState !== 'EXPLANATION_ACTIVE'}
+                className="bg-slate-900 px-10 py-5 rounded-[24px] text-white font-bold text-lg shadow-2xl shadow-slate-900/20 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed hover:-translate-y-0.5 active:scale-[0.98] transition-all"
+              >
+                熟知，下一题 →
+              </button>
+            </div>
+
+          </div>
         )}
-      </main>
+
+      </div>
     </AppLayout>
   );
 }

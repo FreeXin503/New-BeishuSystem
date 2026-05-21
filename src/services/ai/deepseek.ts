@@ -1,6 +1,4 @@
-/**
- * DeepSeek API 服务封装
- */
+import { getService } from '../../lib/di';
 
 const API_URL = 'https://api.deepseek.com/v1/chat/completions';
 const API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY as string | undefined;
@@ -124,9 +122,9 @@ async function callDeepSeek(
 }
 
 /**
- * 带重试的 API 调用
+ * 带重试的 原始 API 调用（供 ProdAIService 使用）
  */
-export async function callDeepSeekWithRetry(
+export async function rawCallDeepSeekWithRetry(
   prompt: string,
   systemPrompt: string,
   maxRetries: number = 3,
@@ -151,9 +149,21 @@ export async function callDeepSeekWithRetry(
 }
 
 /**
- * 支持完整聊天上下文的 API 调用
+ * 带有重试的 代理 API 调用（供应用其他部分使用）
  */
-export async function callDeepSeekChatWithRetry(
+export async function callDeepSeekWithRetry(
+  prompt: string,
+  systemPrompt: string,
+  maxRetries: number = 3,
+  temperature: number = 0.7
+): Promise<string> {
+  return getService('aiService').callDeepSeekWithRetry(prompt, systemPrompt, maxRetries, temperature);
+}
+
+/**
+ * 支持完整聊天上下文的 原始 API 调用（供 ProdAIService 使用）
+ */
+export async function rawCallDeepSeekChatWithRetry(
   messages: Message[],
   maxRetries: number = 3,
   temperature: number = 0.7
@@ -208,6 +218,17 @@ export async function callDeepSeekChatWithRetry(
   }
 
   throw lastError || new AIServiceError('Max retries exceeded', 'API_ERROR', false);
+}
+
+/**
+ * 支持完整聊天上下文的 代理 API 调用（供应用其他部分使用）
+ */
+export async function callDeepSeekChatWithRetry(
+  messages: Message[],
+  maxRetries: number = 3,
+  temperature: number = 0.7
+): Promise<string> {
+  return getService('aiService').callDeepSeekChatWithRetry(messages, maxRetries, temperature);
 }
 
 // ==================== Prompts ====================
